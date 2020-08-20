@@ -285,6 +285,6 @@ def normalizeTensor(tensorFilt):
             tensorFilt[:, r, c] = tensorFilt[:, r, c] / max([1, sumInt])
 
 
-def getISAEq(formula):
-    d = {"C16H32O2":palmitateISA,"C14H28O2":myristicISA,"C18H36O2":stearicISA}
-    return d[formula]
+def getISAEq(numCarbons):
+    d = {16:palmitateISA,14:myristicISA,18:stearicISA}
+    return d[numCarbons]
