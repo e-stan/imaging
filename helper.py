@@ -80,6 +80,43 @@ def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=False):
     return g, D, T, err, P_pred
 
 
+def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=False):
+    sol = opt.minimize(
+        lambda x: objectiveFunc(P, func(x[0], 1.0, T, N, P), goodInd),
+        x0=x_init, bounds=[(0, 1) for _ in range(len(x_init))])
+    g, D = sol.x[:2]
+    D = 1.0
+    err = sol.fun
+    P_pred = func(g, D, T, N, P)
+    x_ind = 0
+    x_lab = []
+    i = 0
+    if plot:
+        for p, pp in zip(P, P_pred):
+            plt.bar([x_ind, x_ind + 1], [p, pp])
+            x_lab.append([x_ind + .5, "M+" + str(i)])
+            x_ind += 4
+            i += 1
+        plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
+
+        plt.figure()
+
+        # plot solution curves
+        D_test = np.linspace(0, 1, 25)
+        for pp in range(len(P)):
+            g_test = []
+            for d in D_test:
+                sol = opt.minimize(lambda x: abs(P[pp] - func(x[0], d, T, N, P)[pp]), x0=[g])
+                g_test.append(sol.x[0])
+            plt.plot(D_test, g_test, c="black")
+
+        plt.scatter([D], [g], color="red")
+        plt.ylim((0, 1))
+        plt.xlabel("D")
+        plt.ylabel("g(t)")
+    return g, D, T, err, P_pred
+
+
 def myristicISA(g, D, T, N, P):
     # define tracer and naturual abundance isotopomers
     N0 = N[0]
