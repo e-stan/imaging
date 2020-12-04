@@ -36,21 +36,37 @@ def scale(im, nR, nC):
 
 
 def objectiveFunc(t, p, goodInd):
-    #     trel = [t[x] for x in goodInd]
-    #     prel = [p[x] for x in goodInd]
-    #     return -1*np.corrcoef(trel,prel)[0,1]
-    return np.sum(np.square(np.subtract(t, p)))
+
+    trel = np.array([t[x] for x in goodInd])
+    prel = np.array([p[x] for x in goodInd])
+
+    trel = trel / np.sum(trel)
+    prel = prel / np.sum(prel)
+
+    return np.sum(np.square(np.subtract(trel, prel)))
 
 
-def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=False):
-    sol = opt.minimize(
-        lambda x: objectiveFunc(P, func(x[0], x[1], [xx / np.sum(x[2:]) for xx in x[2:]], N, P), goodInd),
-        x0=np.concatenate((x_init, T), axis=None),
-        bounds=[(0, 1) for _ in range(len(x_init) + len(T))])
-    g, D = sol.x[:2]
-    T = sol.x[2:]
+def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False):
+
+    success = False
+    initial_params = np.concatenate((x_init, T), axis=None)
+    while not success:
+        sol = opt.minimize(
+            lambda x: objectiveFunc(P, func(x[0], 1.0, [xx / np.sum(x[1:]) for xx in x[1:]], N, P), goodInd),
+            x0=initial_params,
+            )#bounds=[(0, 1) for _ in range(len(x_init) + len(T))])
+        if not sol.success:
+            initial_params = np.random.random(initial_params.shape)
+        else:
+            success = True
+    #g, D = sol.x[:2]
+    g = sol.x[0]
+    D = 1
+    T = sol.x[1:]
+    T = T/np.sum(T)
     err = sol.fun
     P_pred = func(g, D, T, N, P)
+    P_pred = P_pred/np.sum(np.array(P_pred)[goodInd])
     x_ind = 0
     x_lab = []
     i = 0
@@ -115,6 +131,18 @@ def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=
         plt.xlabel("D")
         plt.ylabel("g(t)")
     return g, D, T, err, P_pred
+
+def convolveLayer(offset,height,width,layer,imageBoundary):
+    # iterate through pixels
+    tensorFilt = np.zeros((height - 2 * offset, width - 2 * offset))
+    for r in range(offset, height - offset):
+        for c in range(offset, width - offset):
+                tempMat = layer[r - offset:r + offset + 1, c - offset:c + offset + 1]
+                coef = imageBoundary[r - offset:r + offset + 1, c - offset:c + offset + 1]
+                coef = coef / max([1, np.sum(coef)])
+                tensorFilt[r - offset, c - offset] = np.sum(np.multiply(tempMat, coef))
+
+    return tensorFilt
 
 
 def myristicISA(g, D, T, N, P):
