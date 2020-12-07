@@ -4,6 +4,9 @@ import scipy.optimize as opt
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.rcParams['figure.dpi'] = 500
+import skimage.filters
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 
 
 # simple image scaling to (nR x nC) size
@@ -96,41 +99,41 @@ def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False):
     return g, D, T, err, P_pred
 
 
-def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=False):
-    sol = opt.minimize(
-        lambda x: objectiveFunc(P, func(x[0], 1.0, T, N, P), goodInd),
-        x0=x_init, bounds=[(0, 1) for _ in range(len(x_init))])
-    g, D = sol.x[:2]
-    D = 1.0
-    err = sol.fun
-    P_pred = func(g, D, T, N, P)
-    x_ind = 0
-    x_lab = []
-    i = 0
-    if plot:
-        for p, pp in zip(P, P_pred):
-            plt.bar([x_ind, x_ind + 1], [p, pp])
-            x_lab.append([x_ind + .5, "M+" + str(i)])
-            x_ind += 4
-            i += 1
-        plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
-
-        plt.figure()
-
-        # plot solution curves
-        D_test = np.linspace(0, 1, 25)
-        for pp in range(len(P)):
-            g_test = []
-            for d in D_test:
-                sol = opt.minimize(lambda x: abs(P[pp] - func(x[0], d, T, N, P)[pp]), x0=[g])
-                g_test.append(sol.x[0])
-            plt.plot(D_test, g_test, c="black")
-
-        plt.scatter([D], [g], color="red")
-        plt.ylim((0, 1))
-        plt.xlabel("D")
-        plt.ylabel("g(t)")
-    return g, D, T, err, P_pred
+# def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=False):
+#     sol = opt.minimize(
+#         lambda x: objectiveFunc(P, func(x[0], 1.0, T, N, P), goodInd),
+#         x0=x_init, bounds=[(0, 1) for _ in range(len(x_init))])
+#     g, D = sol.x[:2]
+#     D = 1.0
+#     err = sol.fun
+#     P_pred = func(g, D, T, N, P)
+#     x_ind = 0
+#     x_lab = []
+#     i = 0
+#     if plot:
+#         for p, pp in zip(P, P_pred):
+#             plt.bar([x_ind, x_ind + 1], [p, pp])
+#             x_lab.append([x_ind + .5, "M+" + str(i)])
+#             x_ind += 4
+#             i += 1
+#         plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
+#
+#         plt.figure()
+#
+#         # plot solution curves
+#         D_test = np.linspace(0, 1, 25)
+#         for pp in range(len(P)):
+#             g_test = []
+#             for d in D_test:
+#                 sol = opt.minimize(lambda x: abs(P[pp] - func(x[0], d, T, N, P)[pp]), x0=[g])
+#                 g_test.append(sol.x[0])
+#             plt.plot(D_test, g_test, c="black")
+#
+#         plt.scatter([D], [g], color="red")
+#         plt.ylim((0, 1))
+#         plt.xlabel("D")
+#         plt.ylabel("g(t)")
+#     return g, D, T, err, P_pred
 
 def convolveLayer(offset,height,width,layer,imageBoundary):
     # iterate through pixels
@@ -144,6 +147,96 @@ def convolveLayer(offset,height,width,layer,imageBoundary):
 
     return tensorFilt
 
+#imput matrix with half feature minimum
+def imputeRowMin(arr,alt_min=2):
+    #find the minimum non-zero value of each compound
+    numImp = 0
+    max_vals = []
+    for c in arr.transpose():
+        tmp = [x for x in c if x > alt_min]
+        if len(tmp) > 0:
+            val = np.min(tmp)
+        else:
+            val = 2*alt_min
+        max_vals.append(val)
+    #impute values
+
+    data_imp = np.zeros((len(arr),len(arr[0])))
+
+    for c in range(len(arr[0])):
+        for r in range(len(arr)):
+            if arr[r,c] > alt_min:
+                if np.isinf(arr[r,c]) or np.isnan(arr[r,c]):
+                    print("bad", arr[r,c])
+                data_imp[r,c] = arr[r,c]
+            else:
+                data_imp[r,c] = max_vals[c]/2
+                numImp += 1
+            if data_imp[r,c] < 1e-3:
+                data_imp[r,c] = alt_min
+                numImp += 1
+    return data_imp
+
+def segmentImage(data,height,width,mzs,colormap,method="TIC_auto",threshold=0,num_latent=2):
+    # go through all features in dataset
+    allFeatTensor = np.array([getImage(data, x, height, width) for x in mzs])
+
+    sumImage = np.sum(allFeatTensor, axis=0)
+    plt.imshow(sumImage, cmap=colormap)
+    plt.colorbar()
+    plt.figure()
+
+    if method=="TIC_auto":
+        # show image and pixel histogram
+        plt.hist(sumImage.flatten())
+
+        # get threshold and mask image
+        threshold = skimage.filters.threshold_otsu(sumImage)
+
+        imageBoundary = sumImage > threshold
+
+        plt.plot([threshold, threshold], [0, 1000])
+    elif method == "TIC_manual":
+        plt.hist(sumImage.flatten())
+        # get threshold and mask image
+        imageBoundary = sumImage > threshold
+
+        plt.plot([threshold, threshold], [0, 1000])
+
+    elif method == "K_means":
+        kmean = KMeans(2)
+        format_data = []
+        ind_mapper = {}
+        for r in range(height):
+            for c in range(width):
+                format_data.append(allFeatTensor[:,r,c])
+                ind_mapper[len(format_data)-1] = (r,c)
+
+        format_data = np.array(format_data)
+        format_data = imputeRowMin(format_data)
+        format_data = np.log2(format_data)
+
+        pca = PCA(n_components=num_latent)
+        format_data = pca.fit_transform(format_data)
+
+        labels = kmean.fit_predict(format_data)
+        group0Int = np.mean([sumImage[ind_mapper[x][0],ind_mapper[x][1]] for x in range(len(labels)) if labels[x] < .5])
+        group1Int = np.mean([sumImage[ind_mapper[x][0],ind_mapper[x][1]] for x in range(len(labels)) if labels[x] > .5])
+
+        if group0Int > group1Int:
+            labels = labels < .5
+
+        plt.figure()
+        plt.scatter(format_data[:,0],format_data[:,1],c=labels)
+        plt.xlabel("PC1 (" + str(np.round(100*pca.explained_variance_ratio_[0],2)) + "%)")
+        plt.ylabel("PC2 (" + str(np.round(100*pca.explained_variance_ratio_[1],2)) + "%)")
+
+        imageBoundary = np.zeros(sumImage.shape)
+        for x in range(len(labels)):
+            if labels[x] > .5:
+                imageBoundary[ind_mapper[x][0],ind_mapper[x][1]] = 1
+
+    return imageBoundary
 
 def myristicISA(g, D, T, N, P):
     # define tracer and naturual abundance isotopomers
@@ -338,7 +431,7 @@ def getImage(data,mz,nrows,ncols):
 
     # make output array
     for [x, y], intens in picDict.items():
-        outarray[xcordMap[float(x)], ycordMap[float(y)]] = intens
+        outarray[xcordMap[float(x)], ycordMap[float(y)]] = float(intens)
     outarray = scale(outarray, nrows, ncols)
 
     return outarray
