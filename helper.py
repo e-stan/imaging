@@ -7,7 +7,8 @@ matplotlib.rcParams['figure.dpi'] = 500
 import skimage.filters
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-
+import scipy.ndimage as ndimage
+from sklearn.manifold import TSNE
 
 # simple image scaling to (nR x nC) size
 def scale(im, nR, nC):
@@ -70,6 +71,9 @@ def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False):
     err = sol.fun
     P_pred = func(g, D, T, N, P)
     P_pred = P_pred/np.sum(np.array(P_pred)[goodInd])
+    for x in range(len(P_pred)):
+        if x not in goodInd:
+            P_pred[x] = 0
     x_ind = 0
     x_lab = []
     maxY = np.max(np.concatenate((P, P_pred)))
@@ -112,7 +116,10 @@ def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=
     D = 1.0
     err = sol.fun
     P_pred = func(g, D, T, N, P)
-    P_pred / np.sum(np.array(P_pred)[goodInd])
+    P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
+    for x in range(len(P_pred)):
+        if x not in goodInd:
+            P_pred[x] = 0
     x_ind = 0
     x_lab = []
     i = 0
@@ -190,7 +197,7 @@ def imputeRowMin(arr,alt_min=2):
                 numImp += 1
     return data_imp
 
-def segmentImage(data,height,width,mzs,colormap,method="TIC_auto",threshold=0,num_latent=2):
+def segmentImage(data,height,width,mzs,colormap,method="TIC_auto",threshold=0,num_latent=2,dm_method="PCA"):
     # go through all features in dataset
     allFeatTensor = np.array([getImage(data, x, height, width) for x in mzs])
 
@@ -229,8 +236,18 @@ def segmentImage(data,height,width,mzs,colormap,method="TIC_auto",threshold=0,nu
         format_data = imputeRowMin(format_data)
         format_data = np.log2(format_data)
 
-        pca = PCA(n_components=num_latent)
-        format_data = pca.fit_transform(format_data)
+        plt.figure()
+        if dm_method == "PCA":
+            pca = PCA(n_components=num_latent)
+            format_data = pca.fit_transform(format_data)
+            plt.xlabel("PC1 (" + str(np.round(100*pca.explained_variance_ratio_[0],2)) + "%)")
+            plt.ylabel("PC2 (" + str(np.round(100*pca.explained_variance_ratio_[1],2)) + "%)")
+
+        elif dm_method == "TSNE":
+            tsne = TSNE(n_components=2)
+            format_data = tsne.fit_transform(format_data)
+            plt.xlabel("t-SNE1")
+            plt.ylabel("t-SNE2")
 
         labels = kmean.fit_predict(format_data)
         group0Int = np.mean([sumImage[ind_mapper[x][0],ind_mapper[x][1]] for x in range(len(labels)) if labels[x] < .5])
@@ -239,15 +256,15 @@ def segmentImage(data,height,width,mzs,colormap,method="TIC_auto",threshold=0,nu
         if group0Int > group1Int:
             labels = labels < .5
 
-        plt.figure()
         plt.scatter(format_data[:,0],format_data[:,1],c=labels)
-        plt.xlabel("PC1 (" + str(np.round(100*pca.explained_variance_ratio_[0],2)) + "%)")
-        plt.ylabel("PC2 (" + str(np.round(100*pca.explained_variance_ratio_[1],2)) + "%)")
+
 
         imageBoundary = np.zeros(sumImage.shape)
         for x in range(len(labels)):
             if labels[x] > .5:
                 imageBoundary[ind_mapper[x][0],ind_mapper[x][1]] = 1
+
+    imageBoundary = ndimage.binary_fill_holes(imageBoundary)
 
     return imageBoundary
 
@@ -450,7 +467,7 @@ def getImage(data,mz,nrows,ncols):
     # make output array
     for [x, y], intens in picDict.items():
         outarray[xcordMap[float(x)], ycordMap[float(y)]] = float(intens)
-    outarray = scale(outarray, nrows, ncols)
+    #outarray = scale(outarray, nrows, ncols)
 
     return outarray
 
