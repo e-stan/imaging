@@ -10,6 +10,7 @@ from sklearn.decomposition import PCA
 import scipy.ndimage as ndimage
 from sklearn.manifold import TSNE
 
+
 # simple image scaling to (nR x nC) size
 def scale(im, nR, nC):
     nR0 = len(im)  # source number of rows
@@ -107,6 +108,62 @@ def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False):
         plt.ylabel("g(t)")
     return g, D, T, err, P_pred
 
+def ISAFit_classical(T, N, P, func, goodInd, x_init=np.random.random((2)), plot=False):
+
+    success = False
+    initial_params = x_init
+    while not success:
+        sol = opt.minimize(
+            lambda x: objectiveFunc(P, func(x[0], x[1], T, N, P), goodInd),
+            x0=initial_params,
+            )#bounds=[(0, 1) for _ in range(len(x_init) + len(T))])
+        if not sol.success:
+            initial_params = np.random.random(initial_params.shape)
+        else:
+            success = True
+    #g, D = sol.x[:2]
+    g = sol.x[0]
+    D = sol.x[1]
+
+    err = sol.fun
+    P_pred = func(g, D, T, N, P)
+    P_pred = P_pred/np.sum(np.array(P_pred)[goodInd])
+    for x in range(len(P_pred)):
+        if x not in goodInd:
+            P_pred[x] = 0
+    x_ind = 0
+    x_lab = []
+    maxY = np.max(np.concatenate((P, P_pred)))
+    i = 0
+    if plot:
+        for p, pp in zip(P, P_pred):
+            plt.bar([x_ind, x_ind + 1], [p, pp],color=["black","red"])
+            x_lab.append([x_ind + .5, "M+" + str(i)])
+            x_ind += 4
+            i += 1
+        plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
+        plt.scatter([-1], [-1], c="red", label="Predicted")
+        plt.scatter([-1], [-1], c="black", label="Measured")
+        plt.legend()
+        plt.ylim((0, maxY))
+        plt.xlim((-2, x_ind + 1))
+        plt.figure()
+
+        # plot solution curves
+        D_test = np.linspace(0, 1, 25)
+        for pp in range(len(P)):
+            g_test = []
+            for d in D_test:
+                sol = opt.minimize(lambda x: abs(P[pp] - func(x[0], d, T, N, P)[pp]), x0=[g])
+                g_test.append(sol.x[0])
+            plt.plot(D_test, g_test, c="black")
+
+        plt.scatter([D], [g], color="red")
+        plt.ylim((0, 1))
+        plt.xlabel("D")
+        plt.ylabel("g(t)")
+    return g, D, T, err, P_pred
+
 
 def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=False):
     sol = opt.minimize(
@@ -155,15 +212,18 @@ def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=
         plt.ylabel("g(t)")
     return g, D, T, err, P_pred
 
-def convolveLayer(offset,height,width,layer,imageBoundary):
+def convolveLayer(offset,height,width,layer,imageBoundary,method="MA"):
     # iterate through pixels
-    tensorFilt = np.zeros((height - 2 * offset, width - 2 * offset))
-    for r in range(offset, height - offset):
-        for c in range(offset, width - offset):
-                tempMat = layer[r - offset:r + offset + 1, c - offset:c + offset + 1]
-                coef = imageBoundary[r - offset:r + offset + 1, c - offset:c + offset + 1]
-                coef = coef / max([1, np.sum(coef)])
-                tensorFilt[r - offset, c - offset] = np.sum(np.multiply(tempMat, coef))
+    if method == "MA":
+        tensorFilt = np.zeros((height - 2 * offset, width - 2 * offset))
+        for r in range(offset, height - offset):
+            for c in range(offset, width - offset):
+                    tempMat = layer[r - offset:r + offset + 1, c - offset:c + offset + 1]
+                    coef = imageBoundary[r - offset:r + offset + 1, c - offset:c + offset + 1]
+                    coef = coef / max([1, np.sum(coef)])
+                    tensorFilt[r - offset, c - offset] = np.sum(np.multiply(tempMat, coef))
+    elif method == "GB":
+        tensorFilt = ndimage.gaussian_filter(layer,offset)
 
     return tensorFilt
 
