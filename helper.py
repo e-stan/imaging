@@ -9,6 +9,7 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 import scipy.ndimage as ndimage
 from sklearn.manifold import TSNE
+from scipy.integrate import quad,quad_vec,fixed_quad
 
 
 # simple image scaling to (nR x nC) size
@@ -107,6 +108,125 @@ def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False):
         plt.xlabel("D")
         plt.ylabel("g(t)")
     return g, D, T, err, P_pred
+
+def integratedISA(G,k1,k2,r,N,numC):
+    func = getISAEq(numC)
+    ts = np.linspace(0,1,20)
+    vals  = np.array([parameterizedIntegrand(t,N,G,k1,k2,r,func) for t in ts])
+    output = np.array([np.trapz(vals[:,x],ts) for x in range(len(vals[0]))])
+    return output
+
+    #return
+    #return quad_vec(lambda t:parameterizedIntegrand(t,N,G,k1,k2,r,func),0,1)[0]
+    #return fixed_quad(parameterizedIntegrand, 0,1,n=5,args=(N,G,k1,k2,r,func))[0]
+
+def generalizedExp(t,c,k):
+    return c*(1-np.exp(-1*k*t))
+
+def full_g_t(t,G,k):
+    return generalizedExp(t,G,k)
+
+def full_x_t(t,k,r):
+    val = generalizedExp(t,1,k)
+    return np.array([1-val,val*r,val*(1-r)])
+
+def parameterizedIntegrand(t,N,G,k1,k2,r,func):
+    return np.array(func(full_g_t(t,G,k1),1.0,full_x_t(t,k2,r),N,None))
+
+def ISAFit_nonSS(T, N, P, numC, goodInd, x_init=np.random.random((3)), plot=False):
+
+    success = False
+    r = T[1]/(T[1] + T[2])
+
+    initial_params = np.concatenate((x_init, [r]), axis=None)
+    while not success:
+        sol = opt.minimize(
+            lambda x: objectiveFunc(P, integratedISA(x[0],x[1],x[2],x[3],N,numC), goodInd),
+            x0=initial_params,
+            )#bounds=[(0, 1) for _ in range(len(x_init) + len(T))])
+        if not sol.success:
+            print("failed")
+            initial_params = np.random.random(initial_params.shape)
+        else:
+            success = True
+            print("passed")
+    #g, D = sol.x[:2]
+    g = full_g_t(1,sol.x[0],sol.x[1])
+    D = 1
+    T = full_x_t(1,sol.x[2],sol.x[3])
+
+    err = sol.fun
+    P_pred = integratedISA(sol.x[0],sol.x[1],sol.x[2],sol.x[3],N,numC)
+    P_pred = P_pred/np.sum(np.array(P_pred)[goodInd])
+    for x in range(len(P_pred)):
+        if x not in goodInd:
+            P_pred[x] = 0
+    x_ind = 0
+    x_lab = []
+    maxY = np.max(np.concatenate((P, P_pred)))
+    i = 0
+    if plot:
+        for p, pp in zip(P, P_pred):
+            plt.bar([x_ind, x_ind + 1], [p, pp],color=["black","red"])
+            x_lab.append([x_ind + .5, "M+" + str(i)])
+            x_ind += 4
+            i += 1
+        plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
+        plt.scatter([-1], [-1], c="red", label="Predicted")
+        plt.scatter([-1], [-1], c="black", label="Measured")
+        plt.legend()
+        plt.ylim((0, maxY))
+        plt.xlim((-2, x_ind + 1))
+
+    return g, D, T, err, P_pred
+
+def ISAFit_nonSS_varD(T, N, P, numC, goodInd, x_init=np.random.random((3)), plot=False):
+
+    success = False
+    r = T[1]/(T[1] + T[2])
+
+    initial_params = np.concatenate((x_init, [r]), axis=None)
+    while not success:
+        sol = opt.minimize(
+            lambda x: objectiveFunc(P, integratedISA(x[0],x[1],x[2],x[3],N,numC), goodInd),
+            x0=initial_params,
+            )#bounds=[(0, 1) for _ in range(len(x_init) + len(T))])
+        if not sol.success:
+            print("failed")
+            initial_params = np.random.random(initial_params.shape)
+        else:
+            success = True
+            print("passed")
+    #g, D = sol.x[:2]
+    g = full_g_t(1,sol.x[0],sol.x[1])
+    D = 1
+    T = full_x_t(1,sol.x[2],sol.x[3])
+
+    err = sol.fun
+    P_pred = integratedISA(sol.x[0],sol.x[1],sol.x[2],sol.x[3],N,numC)
+    P_pred = P_pred/np.sum(np.array(P_pred)[goodInd])
+    for x in range(len(P_pred)):
+        if x not in goodInd:
+            P_pred[x] = 0
+    x_ind = 0
+    x_lab = []
+    maxY = np.max(np.concatenate((P, P_pred)))
+    i = 0
+    if plot:
+        for p, pp in zip(P, P_pred):
+            plt.bar([x_ind, x_ind + 1], [p, pp],color=["black","red"])
+            x_lab.append([x_ind + .5, "M+" + str(i)])
+            x_ind += 4
+            i += 1
+        plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
+        plt.scatter([-1], [-1], c="red", label="Predicted")
+        plt.scatter([-1], [-1], c="black", label="Measured")
+        plt.legend()
+        plt.ylim((0, maxY))
+        plt.xlim((-2, x_ind + 1))
+
+    return g, D, T, err, P_pred
+
 
 def ISAFit_classical(T, N, P, func, goodInd, x_init=np.random.random((2)), plot=False):
 
