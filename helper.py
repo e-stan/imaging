@@ -41,7 +41,7 @@ def scale(im, nR, nC):
         return im
 
 
-def objectiveFunc(t, p, goodInd):
+def objectiveFunc(t, p, goodInd,params = [],alpha=0,lam=0):
 
     trel = np.array([t[x] for x in goodInd])
     prel = np.array([p[x] for x in goodInd])
@@ -49,7 +49,7 @@ def objectiveFunc(t, p, goodInd):
     trel = trel / np.sum(trel)
     prel = prel / np.sum(prel)
 
-    return np.sum(np.square(np.subtract(trel, prel)))
+    return np.sum(np.square(np.subtract(trel, prel))) + alpha*lam*np.sum(np.abs(params)) + (1-alpha)/2 * lam * np.sum(np.square(params))
 
 
 def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False):
@@ -109,10 +109,24 @@ def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False):
         plt.ylabel("g(t)")
     return g, D, T, err, P_pred
 
-def integratedISA(G,k1,k2,r,N,numC):
+def integratedISAFull(G,k1,k2,k3,k4,T,N,numC):
     func = getISAEq(numC)
     ts = np.linspace(0,1,20)
-    vals  = np.array([parameterizedIntegrand(t,N,G,k1,k2,r,func) for t in ts])
+    vals  = np.array([parameterizedIntegrandFull(t,N,G,k1,k2,k3,k4,T,func) for t in ts])
+    output = np.array([np.trapz(vals[:,x],ts) for x in range(len(vals[0]))])
+    return output
+
+def parameterizedIntegrandFull(t,N,G,k1,k2,k3,k4,T,func):
+    val = [1-generalizedExp(t,1-T[0],k2),generalizedExp(t,T[1],k3),generalizedExp(t,T[2],k4)]
+    val = val / np.sum(val)
+    return np.array(func(full_g_t(t,G,k1),1.0,val,N,None))
+
+
+def integratedISA(G,k1,k2,T,N,numC):
+    func = getISAEq(numC)
+    ts = np.linspace(0,1,20)
+    T = T/np.sum(T)
+    vals  = np.array([parameterizedIntegrand(t,N,G,k1,k2,T,func) for t in ts])
     output = np.array([np.trapz(vals[:,x],ts) for x in range(len(vals[0]))])
     return output
 
@@ -130,33 +144,35 @@ def full_x_t(t,k,r):
     val = generalizedExp(t,1,k)
     return np.array([1-val,val*r,val*(1-r)])
 
-def parameterizedIntegrand(t,N,G,k1,k2,r,func):
-    return np.array(func(full_g_t(t,G,k1),1.0,full_x_t(t,k2,r),N,None))
+def d_t(t,D,k):
+    return generalizedExp(t,D,k)
+
+def parameterizedIntegrand(t,N,G,k1,k2,T,func):
+    return np.array(func(full_g_t(t,G,k1),d_t(t,1,k2),T,N,None))
 
 def ISAFit_nonSS(T, N, P, numC, goodInd, x_init=np.random.random((3)), plot=False):
 
     success = False
-    r = T[1]/(T[1] + T[2])
 
-    initial_params = np.concatenate((x_init, [r]), axis=None)
+    initial_params = np.concatenate((x_init, T), axis=None)
     while not success:
         sol = opt.minimize(
-            lambda x: objectiveFunc(P, integratedISA(x[0],x[1],x[2],x[3],N,numC), goodInd),
+            lambda x: objectiveFunc(P, integratedISA(x[0],x[1],x[2],[x[3],x[4],x[5]],N,numC), goodInd,[x[0],x[4]/np.sum(x[3:]),x[5]/np.sum(x[3:])],alpha=0,lam=1e-2),
             x0=initial_params,
-            )#bounds=[(0, 1) for _ in range(len(x_init) + len(T))])
+            bounds=[(0, m) for m in [1,np.inf,np.inf,np.inf,np.inf,np.inf]])
         if not sol.success:
             print("failed")
             initial_params = np.random.random(initial_params.shape)
         else:
             success = True
-            print("passed")
     #g, D = sol.x[:2]
     g = full_g_t(1,sol.x[0],sol.x[1])
-    D = 1
-    T = full_x_t(1,sol.x[2],sol.x[3])
+    D = d_t(1,1,sol.x[2])
+    T = sol.x[3:]
+    T = T/np.sum(T)
 
     err = sol.fun
-    P_pred = integratedISA(sol.x[0],sol.x[1],sol.x[2],sol.x[3],N,numC)
+    P_pred = integratedISA(sol.x[0],sol.x[1],sol.x[2],T,N,numC)
     P_pred = P_pred/np.sum(np.array(P_pred)[goodInd])
     for x in range(len(P_pred)):
         if x not in goodInd:
@@ -180,30 +196,30 @@ def ISAFit_nonSS(T, N, P, numC, goodInd, x_init=np.random.random((3)), plot=Fals
 
     return g, D, T, err, P_pred
 
-def ISAFit_nonSS_varD(T, N, P, numC, goodInd, x_init=np.random.random((3)), plot=False):
+def ISAFit_nonSS_full(T, N, P, numC, goodInd, x_init=np.random.random((5)), plot=False):
 
     success = False
-    r = T[1]/(T[1] + T[2])
 
-    initial_params = np.concatenate((x_init, [r]), axis=None)
+    initial_params = np.concatenate((x_init, T), axis=None)
     while not success:
         sol = opt.minimize(
-            lambda x: objectiveFunc(P, integratedISA(x[0],x[1],x[2],x[3],N,numC), goodInd),
+            lambda x: objectiveFunc(P, integratedISAFull(x[0],x[1],x[2],x[3],x[4],x[5:],N,numC), goodInd),
             x0=initial_params,
-            )#bounds=[(0, 1) for _ in range(len(x_init) + len(T))])
+            bounds=[(0, m) for m in [1,np.inf,np.inf,np.inf,np.inf,np.inf,np.inf,np.inf]])
         if not sol.success:
             print("failed")
             initial_params = np.random.random(initial_params.shape)
         else:
             success = True
-            print("passed")
     #g, D = sol.x[:2]
     g = full_g_t(1,sol.x[0],sol.x[1])
-    D = 1
-    T = full_x_t(1,sol.x[2],sol.x[3])
+    D = 1.0
+    T = sol.x[5:]
+    #T[0] = 1-T[0]
+    T = T/np.sum(T)
 
     err = sol.fun
-    P_pred = integratedISA(sol.x[0],sol.x[1],sol.x[2],sol.x[3],N,numC)
+    P_pred = integratedISAFull(sol.x[0],sol.x[1],sol.x[2],sol.x[3],sol.x[4],sol.x[5:],N,numC)
     P_pred = P_pred/np.sum(np.array(P_pred)[goodInd])
     for x in range(len(P_pred)):
         if x not in goodInd:
@@ -226,6 +242,7 @@ def ISAFit_nonSS_varD(T, N, P, numC, goodInd, x_init=np.random.random((3)), plot
         plt.xlim((-2, x_ind + 1))
 
     return g, D, T, err, P_pred
+
 
 
 def ISAFit_classical(T, N, P, func, goodInd, x_init=np.random.random((2)), plot=False):
