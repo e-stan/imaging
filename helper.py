@@ -119,7 +119,22 @@ def integratedISAFull(G,k1,k2,k3,k4,T,N,numC):
 def parameterizedIntegrandFull(t,N,G,k1,k2,k3,k4,T,func):
     val = [1-generalizedExp(t,1-T[0],k2),generalizedExp(t,T[1],k3),generalizedExp(t,T[2],k4)]
     val = val / np.sum(val)
-    return np.array(func(full_g_t(t,G,k1),1.0,val,N,None))
+    return np.array(func(full_dgdt(t,G,k1),1.0,val,N,None))
+
+def integrated_X_full(T,k2,k3,k4):
+    #ts = np.linspace(0, 1, 100)
+    #vals = []
+    #for t in ts:
+    #    val = [1 - generalizedExp(t, 1 - T[0], k2), generalizedExp(t, T[1], k3), generalizedExp(t, T[2], k4)]
+    #    val = val / np.sum(val)
+    #    vals.append(val)
+    #vals=np.array(vals)
+    #output = np.array([np.trapz(vals[:, x], ts) for x in range(len(vals[0]))])
+
+    val = [1 - generalizedExp(1, 1 - T[0], k2), generalizedExp(1, T[1], k3), generalizedExp(1, T[2], k4)]
+    output = val / np.sum(val)
+
+    return output
 
 
 def integratedISA(G,k1,k2,T,N,numC):
@@ -140,15 +155,24 @@ def generalizedExp(t,c,k):
 def full_g_t(t,G,k):
     return generalizedExp(t,G,k)
 
-def full_x_t(t,k,r):
-    val = generalizedExp(t,1,k)
-    return np.array([1-val,val*r,val*(1-r)])
+def full_dgdt(t,G,k):
+    return k*G*np.exp(-1*k*t)
 
 def d_t(t,D,k):
     return generalizedExp(t,D,k)
 
 def parameterizedIntegrand(t,N,G,k1,k2,T,func):
-    return np.array(func(full_g_t(t,G,k1),d_t(t,1,k2),T,N,None))
+    return np.array(func(full_dgdt(t,G,k1),d_t(t,1,k2),T,N,None))
+
+def integrated_X(T,N,k2):
+    #ts = np.linspace(0,1,100)
+    #vals = np.array([d_t(t,1,k2)*np.array(T)+(1-d_t(t,1,k2)) * np.array(N) for t in ts])
+    #output = np.array([np.trapz(vals[:,x],ts) for x in range(len(vals[0]))])
+    #return output
+    t=1
+    return d_t(t, 1, k2) * np.array(T) + (1 - d_t(t, 1, k2)) * np.array(N)
+
+
 
 def ISAFit_nonSS(T, N, P, numC, goodInd, x_init=np.random.random((3)), plot=False):
 
@@ -170,6 +194,7 @@ def ISAFit_nonSS(T, N, P, numC, goodInd, x_init=np.random.random((3)), plot=Fals
     D = d_t(1,1,sol.x[2])
     T = sol.x[3:]
     T = T/np.sum(T)
+
 
     err = sol.fun
     P_pred = integratedISA(sol.x[0],sol.x[1],sol.x[2],T,N,numC)
@@ -194,6 +219,7 @@ def ISAFit_nonSS(T, N, P, numC, goodInd, x_init=np.random.random((3)), plot=Fals
         plt.ylim((0, maxY))
         plt.xlim((-2, x_ind + 1))
 
+    T = integrated_X(T,N,sol.x[2])
     return g, D, T, err, P_pred
 
 def ISAFit_nonSS_full(T, N, P, numC, goodInd, x_init=np.random.random((5)), plot=False):
@@ -240,6 +266,8 @@ def ISAFit_nonSS_full(T, N, P, numC, goodInd, x_init=np.random.random((5)), plot
         plt.legend()
         plt.ylim((0, maxY))
         plt.xlim((-2, x_ind + 1))
+
+    T = integrated_X_full(T,sol.x[2],sol.x[3],sol.x[4])
 
     return g, D, T, err, P_pred
 
