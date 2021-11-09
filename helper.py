@@ -51,6 +51,34 @@ def objectiveFunc(t, p, goodInd,params = [],alpha=0,lam=0):
 
     return np.sum(np.square(np.subtract(trel, prel))) + alpha*lam*np.sum(np.abs(params)) + (1-alpha)/2 * lam * np.sum(np.square(params))
 
+def NAA_labeling(aCoa,asp):
+    return [aCoa[0]*asp[0], #M0
+           aCoa[0]*asp[1] + aCoa[1] * asp[0], #M1
+           aCoa[0]*asp[2] + aCoa[1] * asp[1] + aCoa[2] * asp[0], #M2
+           aCoa[0] * asp[3] + aCoa[1] * asp[2] + aCoa[2] * asp[1], #M3
+           aCoa[0] * asp[4] + aCoa[1] * asp[3] + aCoa[2] * asp[2], #M4
+           aCoa[1] * asp[4] + aCoa[2] * asp[3], #M5
+           aCoa[2] * asp[4]] #6
+
+def findAcetylCoa(naa,asp):
+    success = False
+    initial_params = np.random.random(3)
+    inital_params = initial_params/np.sum(initial_params)
+    func = lambda x: NAA_labeling(x,asp)
+    goodInds = list(range(len(naa)))
+    goodInds = [0,1,2,3,4,5,6]
+
+    sol = opt.minimize(
+        lambda x: objectiveFunc(naa, func(x/np.sum(x)),goodInds),
+        x0=initial_params,method="trust-constr",
+        bounds = [(0,np.inf) for _ in range(len(initial_params))])
+
+            
+    acetylCoA = sol.x/np.sum(sol.x)
+    err = sol.fun
+    fit = func(acetylCoA)
+            
+    return acetylCoA,err,fit
 
 def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False):
 
