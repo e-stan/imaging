@@ -10,6 +10,7 @@ from sklearn.decomposition import PCA
 import scipy.ndimage as ndimage
 from sklearn.manifold import TSNE
 from scipy.integrate import quad,quad_vec,fixed_quad
+import matplotlib.animation as animation
 
 
 # simple image scaling to (nR x nC) size
@@ -829,6 +830,84 @@ def dhaISA(e, D, T, N, P):
     P = list(np.array(P)/np.sum(P))
 
     return P
+
+
+def extractIntensity(mz, spectrum, ppm, mode="profile"):
+    if mode == "centroid":
+        width = ppm * mz / 1e6
+    else:
+        width = mz / ppm / 2
+    mz_start = mz - width
+    mz_end = mz + width
+    intensity = np.sum([i for mz, i in spectrum.items() if mz > mz_start and mz < mz_end])
+    return intensity
+
+
+def mergeMzLists(old, new, ppm, mode):
+    for x in new:
+        unique = True
+        if mode == "centroid":
+            width = ppm * mz / 1e6
+        else:
+            width = mz / ppm / 2
+        mi = x - width
+        ma = x + width
+        for y in old:
+            if y > mi and y < ma:
+                unique = False
+                break
+        if unique:
+            old.append(x)
+    return old
+
+
+def reformat_data(tensor, mzs, string=""):
+    nrows = tensor.shape[1]
+    ncols = tensor.shape[2]
+    ntotal = nrows * ncols
+    df = pd.DataFrame(index=range(ntotal))
+
+    for met, i in zip(mzs, range(len(tensor))):
+        x = []
+        y = []
+        ints = []
+        for r in range(nrows):
+            for c in range(ncols):
+                x.append(c)
+                y.append(r)
+                ints.append(tensor[i][r][c])
+        df[met] = ints
+
+    df["x"] = x
+    df["y"] = y
+    df = df[["x", "y"] + list(df.columns.values[:-2])]
+    return df
+
+
+def writeFormattedData(data, fn, string):
+    data.to_csv(fn, sep="\t")
+    f = open(fn, "r")
+    lines = f.readlines()
+    f.close()
+    f = open(fn, "w")
+    f.write(string + "\n\n\n")
+    [f.write(x) for x in lines]
+    f.close()
+
+
+def animate(images):
+    fig, ax = plt.subplots()
+    i = 0
+    ims = []
+    for im in images:
+        if i == 0:
+            ax.imshow(im)
+        im = ax.imshow(im, animated=True)
+        ims.append([im])
+        i += 1
+    ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
+    return ani
+
 
 def getImage(data,mz,nrows,ncols):
     # collect coordinate intensity pairs
