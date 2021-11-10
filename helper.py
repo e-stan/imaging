@@ -11,7 +11,7 @@ import scipy.ndimage as ndimage
 from sklearn.manifold import TSNE
 from scipy.integrate import quad,quad_vec,fixed_quad
 import matplotlib.animation as animation
-
+import pandas as pd
 
 # simple image scaling to (nR x nC) size
 def scale(im, nR, nC):
@@ -891,7 +891,10 @@ def writeFormattedData(data, fn, string):
     f.close()
     f = open(fn, "w")
     f.write(string + "\n\n\n")
-    [f.write(x) for x in lines]
+    f.write("\t\t")
+    mzs = lines[0].split("\t")[3:]
+    [f.write("\t"+str(mz)) for mz in mzs]
+    [f.write(x) for x in lines[1:]]
     f.close()
 
 
