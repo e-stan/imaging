@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='SIMISToolBox',  # How you named your package folder (MyLib)
+    name='SIMSIToolBox',  # How you named your package folder (MyLib)
     packages=["SIMSIToolBox"],  # Chose the same as "name"
     version='0.0.1',  # Start with a small number and increase it with every change you make
     license='MIT',  # Chose a license from here: https://help.github.com/articles/licensing-a-repository
