@@ -19,7 +19,8 @@ setup(
         "scikit-image",
         "scikit-learn",
         "molmass",
-        "Pillow"
+        "Pillow",
+        "pyimzml"
     ],
     classifiers=[
         'Development Status :: 3 - Alpha',
