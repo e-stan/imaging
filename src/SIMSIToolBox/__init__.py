@@ -13,7 +13,7 @@ from pyimzml.ImzMLParser import ImzMLParser, getionimage
 from pyimzml.ImzMLWriter import ImzMLWriter
 from multiprocessing import Pool
 from PIL import Image
-import isocor
+import picor
 import molmass
 
 def objectiveFunc(t, p, goodInd, params=[], alpha=0, lam=0):
@@ -651,17 +651,15 @@ def dhaISA(e, D, T, N, P):
 
     return P
 
-def correctNaturalAbundance(vec,formula,resolution,res_mz,charge = 1,tracer="13C",resolution_formula_code="constant",tracer_purity=[0,1]):
-    corrector = isocor.mscorrectors.MetaboliteCorrectorFactory(formula, tracer=tracer, resolution=resolution,
-                                                                  mz_of_resolution=res_mz, charge=charge,
-                                                               resolution_formula_code=resolution_formula_code,
-                                                               tracer_purity = tracer_purity)
-    vec_cor,_,_,_ = corrector.correct(vec)
+def correctNaturalAbundance(vec,formula,charge = -1):
+    data = pd.DataFrame(data=vec.reshape(1, -1), index=[0],
+                        columns=["No label"] + [str(x + 1) + "C13" for x in range(len(vec) - 1)])
+    vec_cor = picor.calc_isotopologue_correction(data, molecule_formula=formula, molecule_charge=charge,resolution_correction=False).values[0]#,resolution=resolution,mz_calibration=res_mz).values[0]
     return vec_cor
 
 
 class MSIData():
-    def __init__(self,targets,ppm,mass_range = [0,1000],numCores = 1,resolution = 60000,resolutionMz = 500,resolutionType="constant"):
+    def __init__(self,targets,ppm,mass_range = [0,1000],numCores = 1):
         self.mzs = []
         self.data_tensor = np.array([])
         self.ppm = ppm
@@ -671,9 +669,7 @@ class MSIData():
         self.mass_range = mass_range
         self.imageBoundary = -1
         self.numCores = numCores
-        self.resolution = resolution
-        self.resolutonMz = resolutionMz
-        self.resolutionType = resolutionType
+
 
     def readimzML(self,filename):
         p = ImzMLParser(filename)  # load data
@@ -922,11 +918,26 @@ class MSIData():
 
         return fluxImageG,fluxImageD,fluxImageT0,fluxImageT1,fluxImageT2,T_founds,P_trues,P_preds,numFounds,errs,errors
 
-    def correctNaturalAbundance(self,formula,charge=1,tracer="13C",tracerPurity = [0,1]):
+    def correctNaturalAbundance(self,formula,charge=-1):
+        args = []
+        coords = []
         for r in range(self.tic_image.shape[0]):
             for c in range(self.tic_image.shape[1]):
-                vec = self.data_tensor[:,r,c]
-                self.data_tensor[:,r,c] = correctNaturalAbundance(vec,formula,self.resolution,self.resolutonMz,charge,tracer,self.resolutionType,tracerPurity)
+                if self.imageBoundary[r,c] > 0.5:
+                    vec = self.data_tensor[:,r,c]
+                    args.append([vec,formula,charge])
+                    coords.append([r,c])
+
+        pool = Pool(self.numCores)
+
+        results = pool.starmap(correctNaturalAbundance, args)
+        #results = [correctNaturalAbundance(*a) for a in args]
+
+        pool.close()
+        pool.join()
+
+        for corr,(x,y) in zip(results,coords):
+            self.data_tensor[:,x,y] = corr
 
 def getMzsOfIsotopologues(formula,elementOfInterest = "C"):
     # calculate relevant m/z's
