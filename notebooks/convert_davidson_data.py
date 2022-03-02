@@ -8,6 +8,7 @@ datadir = "../data/Davidson_data/"
 for file in os.listdir(datadir):
 
     if ".mat" in file:
+        print(file)
         f = h5py.File(datadir + file,"r")
         dat = f["msi"]["data"]
         ind = 0
