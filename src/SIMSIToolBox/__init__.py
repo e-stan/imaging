@@ -8,38 +8,11 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 import scipy.ndimage as ndimage
 from sklearn.manifold import TSNE
-import matplotlib.animation as animation
 import pandas as pd
-
-
-# simple image scaling to (nR x nC) size
-def scale(im, nR, nC):
-    nR0 = len(im)  # source number of rows
-    nC0 = len(im[0])  # source number of columns
-    blockSizeR = int(np.ceil(nR0 / nR))
-    blockSizeC = int(np.ceil(nC0 / nC))
-
-    if nR0 >= nR and nC0 >= nC:
-
-        outarray = np.zeros((nR, nC))
-
-        for r in range(nR):
-            for c in range(nC):
-                if blockSizeR * (r + 1) > nR0 - 1:
-                    stopR = nR0
-                else:
-                    stopR = blockSizeR * (r + 1)
-                if blockSizeC * (c + 1) > nC0 - 1:
-                    stopC = nC0
-                else:
-                    stopC = blockSizeC * (c + 1)
-
-                outarray[r, c] = np.sum(im[blockSizeR * r:stopR, blockSizeC * c:stopC])
-        return outarray
-    else:
-        print("image can only be downsampled")
-        return im
-
+from pyimzml.ImzMLParser import ImzMLParser, getionimage
+from pyimzml.ImzMLWriter import ImzMLWriter
+from multiprocessing import Pool
+from PIL import Image
 
 def objectiveFunc(t, p, goodInd, params=[], alpha=0, lam=0):
     trel = np.array([t[x] for x in goodInd])
@@ -50,37 +23,6 @@ def objectiveFunc(t, p, goodInd, params=[], alpha=0, lam=0):
 
     return np.sum(np.square(np.subtract(trel, prel))) + alpha * lam * np.sum(np.abs(params)) + (
                 1 - alpha) / 2 * lam * np.sum(np.square(params))
-
-
-def NAA_labeling(aCoa, asp):
-    return [aCoa[0] * asp[0],  # M0
-            aCoa[0] * asp[1] + aCoa[1] * asp[0],  # M1
-            aCoa[0] * asp[2] + aCoa[1] * asp[1] + aCoa[2] * asp[0],  # M2
-            aCoa[0] * asp[3] + aCoa[1] * asp[2] + aCoa[2] * asp[1],  # M3
-            aCoa[0] * asp[4] + aCoa[1] * asp[3] + aCoa[2] * asp[2],  # M4
-            aCoa[1] * asp[4] + aCoa[2] * asp[3],  # M5
-            aCoa[2] * asp[4]]  # 6
-
-
-def findAcetylCoa(naa, asp):
-    success = False
-    initial_params = np.random.random(3)
-    inital_params = initial_params / np.sum(initial_params)
-    func = lambda x: NAA_labeling(x, asp)
-    goodInds = list(range(len(naa)))
-    goodInds = [0, 1, 2, 3, 4, 5, 6]
-
-    sol = opt.minimize(
-        lambda x: objectiveFunc(naa, func(x / np.sum(x)), goodInds),
-        x0=initial_params, method="trust-constr",
-        bounds=[(0, np.inf) for _ in range(len(initial_params))])
-
-    acetylCoA = sol.x / np.sum(sol.x)
-    err = sol.fun
-    fit = func(acetylCoA)
-
-    return acetylCoA, err, fit
-
 
 def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False):
     success = False
@@ -154,15 +96,6 @@ def parameterizedIntegrandFull(t, N, G, k1, k2, k3, k4, T, func):
 
 
 def integrated_X_full(T, k2, k3, k4):
-    # ts = np.linspace(0, 1, 100)
-    # vals = []
-    # for t in ts:
-    #    val = [1 - generalizedExp(t, 1 - T[0], k2), generalizedExp(t, T[1], k3), generalizedExp(t, T[2], k4)]
-    #    val = val / np.sum(val)
-    #    vals.append(val)
-    # vals=np.array(vals)
-    # output = np.array([np.trapz(vals[:, x], ts) for x in range(len(vals[0]))])
-
     val = [1 - generalizedExp(1, 1 - T[0], k2), generalizedExp(1, T[1], k3), generalizedExp(1, T[2], k4)]
     output = val / np.sum(val)
 
@@ -176,11 +109,6 @@ def integratedISA(G, k1, k2, T, N, numC):
     vals = np.array([parameterizedIntegrand(t, N, G, k1, k2, T, func) for t in ts])
     output = np.array([np.trapz(vals[:, x], ts) for x in range(len(vals[0]))])
     return output
-
-    # return
-    # return quad_vec(lambda t:parameterizedIntegrand(t,N,G,k1,k2,r,func),0,1)[0]
-    # return fixed_quad(parameterizedIntegrand, 0,1,n=5,args=(N,G,k1,k2,r,func))[0]
-
 
 def generalizedExp(t, c, k):
     return c * (1 - np.exp(-1 * k * t))
@@ -203,109 +131,105 @@ def parameterizedIntegrand(t, N, G, k1, k2, T, func):
 
 
 def integrated_X(T, N, k2):
-    # ts = np.linspace(0,1,100)
-    # vals = np.array([d_t(t,1,k2)*np.array(T)+(1-d_t(t,1,k2)) * np.array(N) for t in ts])
-    # output = np.array([np.trapz(vals[:,x],ts) for x in range(len(vals[0]))])
-    # return output
     t = 1
     return d_t(t, 1, k2) * np.array(T) + (1 - d_t(t, 1, k2)) * np.array(N)
 
-
-def ISAFit_nonSS(T, N, P, numC, goodInd, x_init=np.random.random((3)), plot=False):
-    success = False
-
-    initial_params = np.concatenate((x_init, T), axis=None)
-    while not success:
-        sol = opt.minimize(
-            lambda x: objectiveFunc(P, integratedISA(x[0], x[1], x[2], [x[3], x[4], x[5]], N, numC), goodInd,
-                                    [x[0], x[4] / np.sum(x[3:]), x[5] / np.sum(x[3:])], alpha=0, lam=1e-2),
-            x0=initial_params,
-            bounds=[(0, m) for m in [1, np.inf, np.inf, np.inf, np.inf, np.inf]])
-        if not sol.success:
-            print("failed")
-            initial_params = np.random.random(initial_params.shape)
-        else:
-            success = True
-    # g, D = sol.x[:2]
-    g = full_g_t(1, sol.x[0], sol.x[1])
-    D = d_t(1, 1, sol.x[2])
-    T = sol.x[3:]
-    T = T / np.sum(T)
-
-    err = sol.fun
-    P_pred = integratedISA(sol.x[0], sol.x[1], sol.x[2], T, N, numC)
-    P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
-    for x in range(len(P_pred)):
-        if x not in goodInd:
-            P_pred[x] = 0
-    x_ind = 0
-    x_lab = []
-    maxY = np.max(np.concatenate((P, P_pred)))
-    i = 0
-    if plot:
-        for p, pp in zip(P, P_pred):
-            plt.bar([x_ind, x_ind + 1], [p, pp], color=["black", "red"])
-            x_lab.append([x_ind + .5, "M+" + str(i)])
-            x_ind += 4
-            i += 1
-        plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
-        plt.scatter([-1], [-1], c="red", label="Predicted")
-        plt.scatter([-1], [-1], c="black", label="Measured")
-        plt.legend()
-        plt.ylim((0, maxY))
-        plt.xlim((-2, x_ind + 1))
-
-    T = integrated_X(T, N, sol.x[2])
-    return g, D, T, err, P_pred
-
-
-def ISAFit_nonSS_full(T, N, P, numC, goodInd, x_init=np.random.random((5)), plot=False):
-    success = False
-
-    initial_params = np.concatenate((x_init, T), axis=None)
-    while not success:
-        sol = opt.minimize(
-            lambda x: objectiveFunc(P, integratedISAFull(x[0], x[1], x[2], x[3], x[4], x[5:], N, numC), goodInd),
-            x0=initial_params,
-            bounds=[(0, m) for m in [1, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf]])
-        if not sol.success:
-            print("failed")
-            initial_params = np.random.random(initial_params.shape)
-        else:
-            success = True
-    # g, D = sol.x[:2]
-    g = full_g_t(1, sol.x[0], sol.x[1])
-    D = 1.0
-    T = sol.x[5:]
-    # T[0] = 1-T[0]
-    T = T / np.sum(T)
-
-    err = sol.fun
-    P_pred = integratedISAFull(sol.x[0], sol.x[1], sol.x[2], sol.x[3], sol.x[4], sol.x[5:], N, numC)
-    P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
-    for x in range(len(P_pred)):
-        if x not in goodInd:
-            P_pred[x] = 0
-    x_ind = 0
-    x_lab = []
-    maxY = np.max(np.concatenate((P, P_pred)))
-    i = 0
-    if plot:
-        for p, pp in zip(P, P_pred):
-            plt.bar([x_ind, x_ind + 1], [p, pp], color=["black", "red"])
-            x_lab.append([x_ind + .5, "M+" + str(i)])
-            x_ind += 4
-            i += 1
-        plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
-        plt.scatter([-1], [-1], c="red", label="Predicted")
-        plt.scatter([-1], [-1], c="black", label="Measured")
-        plt.legend()
-        plt.ylim((0, maxY))
-        plt.xlim((-2, x_ind + 1))
-
-    T = integrated_X_full(T, sol.x[2], sol.x[3], sol.x[4])
-
-    return g, D, T, err, P_pred
+#
+# def ISAFit_nonSS(T, N, P, numC, goodInd, x_init=np.random.random((3)), plot=False):
+#     success = False
+#
+#     initial_params = np.concatenate((x_init, T), axis=None)
+#     while not success:
+#         sol = opt.minimize(
+#             lambda x: objectiveFunc(P, integratedISA(x[0], x[1], x[2], [x[3], x[4], x[5]], N, numC), goodInd,
+#                                     [x[0], x[4] / np.sum(x[3:]), x[5] / np.sum(x[3:])], alpha=0, lam=1e-2),
+#             x0=initial_params,
+#             bounds=[(0, m) for m in [1, np.inf, np.inf, np.inf, np.inf, np.inf]])
+#         if not sol.success:
+#             print("failed")
+#             initial_params = np.random.random(initial_params.shape)
+#         else:
+#             success = True
+#     # g, D = sol.x[:2]
+#     g = full_g_t(1, sol.x[0], sol.x[1])
+#     D = d_t(1, 1, sol.x[2])
+#     T = sol.x[3:]
+#     T = T / np.sum(T)
+#
+#     err = sol.fun
+#     P_pred = integratedISA(sol.x[0], sol.x[1], sol.x[2], T, N, numC)
+#     P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
+#     for x in range(len(P_pred)):
+#         if x not in goodInd:
+#             P_pred[x] = 0
+#     x_ind = 0
+#     x_lab = []
+#     maxY = np.max(np.concatenate((P, P_pred)))
+#     i = 0
+#     if plot:
+#         for p, pp in zip(P, P_pred):
+#             plt.bar([x_ind, x_ind + 1], [p, pp], color=["black", "red"])
+#             x_lab.append([x_ind + .5, "M+" + str(i)])
+#             x_ind += 4
+#             i += 1
+#         plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
+#         plt.scatter([-1], [-1], c="red", label="Predicted")
+#         plt.scatter([-1], [-1], c="black", label="Measured")
+#         plt.legend()
+#         plt.ylim((0, maxY))
+#         plt.xlim((-2, x_ind + 1))
+#
+#     T = integrated_X(T, N, sol.x[2])
+#     return g, D, T, err, P_pred
+#
+#
+# def ISAFit_nonSS_full(T, N, P, numC, goodInd, x_init=np.random.random((5)), plot=False):
+#     success = False
+#
+#     initial_params = np.concatenate((x_init, T), axis=None)
+#     while not success:
+#         sol = opt.minimize(
+#             lambda x: objectiveFunc(P, integratedISAFull(x[0], x[1], x[2], x[3], x[4], x[5:], N, numC), goodInd),
+#             x0=initial_params,
+#             bounds=[(0, m) for m in [1, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf]])
+#         if not sol.success:
+#             print("failed")
+#             initial_params = np.random.random(initial_params.shape)
+#         else:
+#             success = True
+#     # g, D = sol.x[:2]
+#     g = full_g_t(1, sol.x[0], sol.x[1])
+#     D = 1.0
+#     T = sol.x[5:]
+#     # T[0] = 1-T[0]
+#     T = T / np.sum(T)
+#
+#     err = sol.fun
+#     P_pred = integratedISAFull(sol.x[0], sol.x[1], sol.x[2], sol.x[3], sol.x[4], sol.x[5:], N, numC)
+#     P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
+#     for x in range(len(P_pred)):
+#         if x not in goodInd:
+#             P_pred[x] = 0
+#     x_ind = 0
+#     x_lab = []
+#     maxY = np.max(np.concatenate((P, P_pred)))
+#     i = 0
+#     if plot:
+#         for p, pp in zip(P, P_pred):
+#             plt.bar([x_ind, x_ind + 1], [p, pp], color=["black", "red"])
+#             x_lab.append([x_ind + .5, "M+" + str(i)])
+#             x_ind += 4
+#             i += 1
+#         plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
+#         plt.scatter([-1], [-1], c="red", label="Predicted")
+#         plt.scatter([-1], [-1], c="black", label="Measured")
+#         plt.legend()
+#         plt.ylim((0, maxY))
+#         plt.xlim((-2, x_ind + 1))
+#
+#     T = integrated_X_full(T, sol.x[2], sol.x[3], sol.x[4])
+#
+#     return g, D, T, err, P_pred
 
 
 def ISAFit_classical(T, N, P, func, goodInd, x_init=np.random.random((2)), plot=False):
@@ -364,54 +288,6 @@ def ISAFit_classical(T, N, P, func, goodInd, x_init=np.random.random((2)), plot=
     return g, D, T, err, P_pred
 
 
-def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=False):
-    sol = opt.minimize(
-        lambda x: objectiveFunc(P, func(x[0], 1.0, T, N, P), goodInd),
-        x0=x_init)
-    g, D = sol.x[:2]
-    D = 1.0
-    err = sol.fun
-    P_pred = func(g, D, T, N, P)
-    P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
-    for x in range(len(P_pred)):
-        if x not in goodInd:
-            P_pred[x] = 0
-    x_ind = 0
-    x_lab = []
-    i = 0
-    maxY = np.max(np.concatenate((P, P_pred)))
-
-    if plot:
-        for p, pp in zip(P, P_pred):
-            plt.bar([x_ind, x_ind + 1], [p, pp], color=["black", "red"])
-            x_lab.append([x_ind + .5, "M+" + str(i)])
-            x_ind += 4
-            i += 1
-        plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
-        plt.scatter([-1], [-1], c="red", label="Predicted")
-        plt.scatter([-1], [-1], c="black", label="Measured")
-        plt.legend()
-        plt.ylim((0, maxY))
-        plt.xlim((-2, x_ind + 1))
-
-        plt.figure()
-
-        # plot solution curves
-        D_test = np.linspace(0, 1, 25)
-        for pp in range(len(P)):
-            g_test = []
-            for d in D_test:
-                sol = opt.minimize(lambda x: abs(P[pp] - func(x[0], d, T, N, P)[pp]), x0=[g])
-                g_test.append(sol.x[0])
-            plt.plot(D_test, g_test, c="black")
-
-        plt.scatter([D], [g], color="red")
-        plt.ylim((0, 1))
-        plt.xlabel("D")
-        plt.ylabel("g(t)")
-    return g, D, T, err, P_pred
-
-
 def convolveLayer(offset, height, width, layer, imageBoundary, method="MA"):
     # iterate through pixels
     if method == "MA":
@@ -438,13 +314,13 @@ def imputeRowMin(arr, alt_min=2):
         if len(tmp) > 0:
             val = np.min(tmp)
         else:
-            val = 2 * alt_min
+            val = alt_min * 2
         max_vals.append(val)
     # impute values
 
-    data_imp = np.zeros((len(arr), len(arr[0])))
+    data_imp = np.zeros(arr.shape)
 
-    for c in range(len(arr[0])):
+    for c in range(arr.shape[1]):
         for r in range(len(arr)):
             if arr[r, c] > alt_min:
                 if np.isinf(arr[r, c]) or np.isnan(arr[r, c]):
@@ -459,77 +335,7 @@ def imputeRowMin(arr, alt_min=2):
     return data_imp
 
 
-def segmentImage(data, height, width, mzs, colormap, method="TIC_auto", threshold=0, num_latent=2, dm_method="PCA"):
-    # go through all features in dataset
-    allFeatTensor = np.array([getImage(data, x, height, width) for x in mzs])
 
-    sumImage = np.sum(allFeatTensor, axis=0)
-    plt.imshow(sumImage, cmap=colormap)
-    plt.colorbar()
-    plt.figure()
-
-    if method == "TIC_auto":
-        # show image and pixel histogram
-        plt.hist(sumImage.flatten())
-
-        # get threshold and mask image
-        threshold = skimage.filters.threshold_otsu(sumImage)
-
-        imageBoundary = sumImage > threshold
-
-        plt.plot([threshold, threshold], [0, 1000])
-    elif method == "TIC_manual":
-        plt.hist(sumImage.flatten())
-        # get threshold and mask image
-        imageBoundary = sumImage > threshold
-
-        plt.plot([threshold, threshold], [0, 1000])
-
-    elif method == "K_means":
-        kmean = KMeans(2)
-        format_data = []
-        ind_mapper = {}
-        for r in range(height):
-            for c in range(width):
-                format_data.append(allFeatTensor[:, r, c])
-                ind_mapper[len(format_data) - 1] = (r, c)
-
-        format_data = np.array(format_data)
-        format_data = imputeRowMin(format_data)
-        format_data = np.log2(format_data)
-
-        plt.figure()
-        if dm_method == "PCA":
-            pca = PCA(n_components=num_latent)
-            format_data = pca.fit_transform(format_data)
-            plt.xlabel("PC1 (" + str(np.round(100 * pca.explained_variance_ratio_[0], 2)) + "%)")
-            plt.ylabel("PC2 (" + str(np.round(100 * pca.explained_variance_ratio_[1], 2)) + "%)")
-
-        elif dm_method == "TSNE":
-            tsne = TSNE(n_components=2)
-            format_data = tsne.fit_transform(format_data)
-            plt.xlabel("t-SNE1")
-            plt.ylabel("t-SNE2")
-
-        labels = kmean.fit_predict(format_data)
-        group0Int = np.mean(
-            [sumImage[ind_mapper[x][0], ind_mapper[x][1]] for x in range(len(labels)) if labels[x] < .5])
-        group1Int = np.mean(
-            [sumImage[ind_mapper[x][0], ind_mapper[x][1]] for x in range(len(labels)) if labels[x] > .5])
-
-        if group0Int > group1Int:
-            labels = labels < .5
-
-        plt.scatter(format_data[:, 0], format_data[:, 1], c=labels)
-
-        imageBoundary = np.zeros(sumImage.shape)
-        for x in range(len(labels)):
-            if labels[x] > .5:
-                imageBoundary[ind_mapper[x][0], ind_mapper[x][1]] = 1
-
-    imageBoundary = ndimage.binary_fill_holes(imageBoundary)
-
-    return imageBoundary
 
 
 def write_file_to_zip(myzip, filename):
@@ -843,6 +649,266 @@ def dhaISA(e, D, T, N, P):
 
     return P
 
+class MSIData():
+    def __init__(self,targets,ppm,mass_range = [0,1000],numCores = 1):
+        self.mzs = []
+        self.data_tensor = np.array([])
+        self.ppm = ppm
+        self.polarity = 0
+        self.targets = targets
+        self.tic_image = -1
+        self.mass_range = mass_range
+        self.imageBoundary = -1
+        self.numCores = numCores
+
+    def readimzML(self,filename):
+        p = ImzMLParser(filename)  # load data
+        self.polarity = p.polarity
+        self.tic_image = getionimage(p, np.mean(self.mass_range), self.mass_range[1] - self.mass_range[0])
+        self.data_tensor = np.zeros((len(self.targets),self.tic_image.shape[0],self.tic_image.shape[1]))
+        for idx, (x,y,_) in enumerate(p.coordinates):
+            mzs, intensities = p.getspectrum(idx)
+            spectrum = {mz:i for mz,i in zip(mzs,intensities)}
+            for i in range(len(self.targets)):
+                self.data_tensor[i,y-1,x-1] = extractIntensity(self.targets[i],spectrum,self.ppm,"centroid")
+        self.imageBoundary = np.ones(self.tic_image.shape)
+
+    def readHDIOutput(self,filename,polarity):
+        data = [r.strip().split() for r in open(filename, "r").readlines()[3:]]
+        data = {(x[0], float(x[1]), float(x[2])): {float(mz): float(i) for mz, i in zip(data[0], x[3:])} for x in data[1:] if
+                len(x) > 0}
+        data = pd.DataFrame.from_dict(data, orient="index")
+        mzs = data.columns.values
+
+        # covert to image coordinates
+        xcords = [float(y) for y in list(set([x[2] for x in data.index.values]))]
+        ycords = [float(y) for y in list(set([x[1] for x in data.index.values]))]
+
+        # make output array and resize if necessary
+        self.data_tensor = np.zeros((len(self.targets),len(xcords), len(ycords)))
+
+        xcords.sort()
+        ycords.sort()
+        xcordMap = {x: i for x, i in zip(xcords, range(len(xcords)))}
+        ycordMap = {x: i for x, i in zip(ycords, range(len(ycords)))}
+
+
+        # gather images for mzs of interest
+        i = 0
+        for mz in self.targets:
+            # iterate through mzs of interest
+            width = self.ppm * mz / 1e6
+            mz_start = mz - width
+            mz_end = mz + width
+            matches = [x for x in mzs if x > mz_start and x < mz_end]
+            for index,row in data.iterrows():
+                self.data_tensor[i,xcordMap[index[2]],ycordMap[index[1]]] += np.sum(row[matches].values)
+            i += 1
+        self.tic_image = np.zeros((len(xcords),len(ycords)))
+
+        for index,row in data.iterrows():
+            self.tic_image[xcordMap[index[2]], ycordMap[index[1]]] += np.sum(row[mzs].values)
+
+        self.polarity = polarity
+        self.imageBoundary = np.ones(self.tic_image.shape)
+
+
+    def to_pandas(self):
+        nrows = self.data_tensor.shape[1]
+        ncols = self.data_tensor.shape[2]
+        ntotal = nrows * ncols
+        df = pd.DataFrame(index=range(ntotal))
+
+        for met, i in zip(self.targets, range(len(self.data_tensor))):
+            x = []
+            y = []
+            ints = []
+            for r in range(nrows):
+                for c in range(ncols):
+                    x.append(c)
+                    y.append(r)
+                    ints.append(self.data_tensor[i][r][c])
+            df[met] = ints
+
+        df["x"] = x
+        df["y"] = y
+        df = df[["x", "y"] + list(df.columns.values[:-2])]
+        return df
+
+    def to_imzML(self,outfile):
+        output = ImzMLWriter(outfile, polarity=self.polarity)
+        df = self.to_pandas()
+        for id,row in df.iterrows():
+            mzs = self.mzs
+            sigs = [row[x] for x in self.mzs]
+            output.addSpectrum(mzs,sigs,(row["x"],row["y"]))
+
+        output.close()
+
+    def segmentImage(self,method="TIC_auto", threshold=0, num_latent=2, dm_method="PCA",fill_holes = True):
+        # go through all features in dataset
+
+        if method == "TIC_auto":
+            # show image and pixel histogram
+            plt.figure()
+            plt.hist(self.tic_image.flatten())
+
+            # get threshold and mask image
+            threshold = skimage.filters.threshold_otsu(self.tic_image)
+
+            imageBoundary = self.tic_image > threshold
+
+            plt.plot([threshold, threshold], [0, 1000])
+
+        elif method == "TIC_manual":
+            plt.figure()
+            plt.hist(self.tic_image.flatten())
+            # get threshold and mask image
+            imageBoundary = self.tic_image > threshold
+
+            plt.plot([threshold, threshold], [0, 1000])
+
+        elif method == "K_means":
+            kmean = KMeans(2)
+
+            format_data = self.to_pandas()
+            xs = format_data["y"].values
+            ys = format_data["x"].values
+            format_data = format_data[self.targets].to_numpy()
+
+            format_data = imputeRowMin(format_data)
+            format_data = np.log2(format_data)
+
+            plt.figure()
+            if dm_method == "PCA":
+                pca = PCA(n_components=num_latent)
+                format_data = pca.fit_transform(format_data)
+                plt.xlabel("PC1 (" + str(np.round(100 * pca.explained_variance_ratio_[0], 2)) + "%)")
+                plt.ylabel("PC2 (" + str(np.round(100 * pca.explained_variance_ratio_[1], 2)) + "%)")
+
+            elif dm_method == "TSNE":
+                tsne = TSNE(n_components=2)
+                format_data = tsne.fit_transform(format_data)
+                plt.xlabel("t-SNE1")
+                plt.ylabel("t-SNE2")
+
+            labels = kmean.fit_predict(format_data)
+            group0Int = np.mean(
+                [self.tic_image[xs[x], ys[x]] for x in range(len(labels)) if labels[x] < .5])
+            group1Int = np.mean(
+                [self.tic_image[xs[x], ys[x]] for x in range(len(labels)) if labels[x] > .5])
+
+            if group0Int > group1Int:
+                labels = labels < .5
+
+            plt.scatter(format_data[:, 0], format_data[:, 1], c=labels)
+
+            imageBoundary = np.zeros(self.tic_image.shape)
+            for x in range(len(labels)):
+                if labels[x] > .5:
+                    imageBoundary[xs[x], ys[x]] = 1
+
+        if fill_holes: imageBoundary = ndimage.binary_fill_holes(imageBoundary)
+
+        self.imageBoundary = imageBoundary
+
+        self.tic_image = np.multiply(self.tic_image,self.imageBoundary)
+
+        for x in range(len(self.targets)):
+            self.data_tensor[x] = np.multiply(self.data_tensor[x],self.imageBoundary)
+
+    def smoothData(self,method,kernal_size):
+        # apply moving average filter
+        offset = int((kernal_size - 1) / 2)
+        height,width = self.tic_image.shape
+
+        pool = Pool(self.numCores)
+        tensorFilt = np.array(pool.starmap(convolveLayer,
+                                           [(offset, height, width, self.data_tensor[t], self.imageBoundary, method) for t in
+                                            range(len(self.targets))]))
+
+
+        pool.close()
+        pool.join()
+
+        tic_smoothed = convolveLayer(offset,height,width,self.tic_image,self.imageBoundary,method)
+
+
+        self.data_tensor = tensorFilt
+        self.tic_image = tic_smoothed
+
+    def runISA(self,isaModel="flexible",T=[0,0,1]):
+        c13ab = 0.011  # natural abundance
+        N = [(1 - c13ab) ** 2, 2 * (1 - c13ab) * c13ab,
+             c13ab ** 2]  # get expected labeling of precursor from natural abundance
+
+        # create data structures to store output
+        errs = []
+        T_founds = []
+        fluxImageG = np.zeros(self.tic_image.shape)
+        fluxImageD = np.zeros(self.tic_image.shape)
+        fluxImageT0 = np.zeros(self.tic_image.shape)
+        fluxImageT1 = np.zeros(self.tic_image.shape)
+        fluxImageT2 = np.zeros(self.tic_image.shape)
+        P_consider = []
+        P_trues = []
+        P_preds = []
+
+        # do pixel by pixel ISA
+        argList = []
+        coords = []
+
+        numCarbons = len(self.data_tensor) - 1
+        data = normalizeTensor(self.data_tensor)
+        func = getISAEq(numCarbons)
+
+        numFounds = []
+
+        for r in range(self.tic_image.shape[0]):
+            for c in range(self.tic_image.shape[1]):
+                # get product labeling
+                P = data[:, r, c]
+
+                goodInd = [x for x in range(len(P)) if P[x] > 0]
+
+                # if not on background pixel
+                if self.imageBoundary[r, c] > .5:
+                    # fit ISA
+                    numFounds.append(len(goodInd))
+                    argList.append((T, N, P, func, goodInd, .5))  # np.random.random(1)))
+                    coords.append((r, c))
+                    P_consider.append(P)
+
+
+        pool = Pool(self.numCores)
+        if isaModel == "flexible":
+            results = pool.starmap(ISAFit, argList)
+        else:
+            results = pool.starmap(ISAFit_classical, argList)
+
+        pool.close()
+        pool.join()
+
+        errors = []
+        for (g, D, T_found, err, P_pred), (r, c), P_true in zip(results, coords, P_consider):
+            # save results in data structures
+            if g > -.0001 and g < 1.1 and all(xx > -0.01 and xx < 1.1 for xx in T_found):
+                errs.append(err)
+                T_founds.append(T_found)
+                P_preds.append(P_pred)
+                P_trues.append(P_true)
+
+                fluxImageG[r, c] = g
+                fluxImageD[r, c] = D
+                fluxImageT0[r, c] = T_found[0]
+                fluxImageT1[r, c] = T_found[1]
+                fluxImageT2[r, c] = T_found[2]
+            else:
+                errors.append(P_true)
+
+        return fluxImageG,fluxImageD,fluxImageT0,fluxImageT1,fluxImageT2,T_founds,P_trues,P_preds,numFounds,errs,errors
+
+
 
 def extractIntensity(mz, spectrum, ppm, mode="profile"):
     if mode == "centroid":
@@ -854,151 +920,26 @@ def extractIntensity(mz, spectrum, ppm, mode="profile"):
     intensity = np.sum([i for mz, i in spectrum.items() if mz > mz_start and mz < mz_end])
     return intensity
 
+def showImage(arr,cmap):
+    plt.imshow(arr,cmap=cmap)
+    plt.colorbar()
+    plt.xticks([])
+    plt.yticks([])
 
-def mergeMzLists(old, new, ppm, mode):
-    for x in new:
-        unique = True
-        if mode == "centroid":
-            width = ppm * mz / 1e6
-        else:
-            width = mz / ppm / 2
-        mi = x - width
-        ma = x + width
-        for y in old:
-            if y > mi and y < ma:
-                unique = False
-                break
-        if unique:
-            old.append(x)
-    return old
-
-
-def reformat_data(tensor, mzs, string=""):
-    nrows = tensor.shape[1]
-    ncols = tensor.shape[2]
-    ntotal = nrows * ncols
-    df = pd.DataFrame(index=range(ntotal))
-
-    for met, i in zip(mzs, range(len(tensor))):
-        x = []
-        y = []
-        ints = []
-        for r in range(nrows):
-            for c in range(ncols):
-                x.append(c)
-                y.append(r)
-                ints.append(tensor[i][r][c])
-        df[met] = ints
-
-    df["x"] = x
-    df["y"] = y
-    df = df[["x", "y"] + list(df.columns.values[:-2])]
-    return df
-
-
-def writeFormattedData(data, fn, string):
-    data.to_csv(fn, sep="\t")
-    f = open(fn, "r")
-    lines = f.readlines()
-    f.close()
-    f = open(fn, "w")
-    f.write(string + "\n\n\n")
-    f.write("\t\t")
-    mzs = lines[0].split("\t")[3:]
-    [f.write("\t" + str(mz)) for mz in mzs]
-    [f.write(x) for x in lines[1:]]
-    f.close()
-
-
-def animate(images):
-    fig, ax = plt.subplots()
-    i = 0
-    ims = []
-    for im in images:
-        if i == 0:
-            ax.imshow(im)
-        im = ax.imshow(im, animated=True)
-        ims.append([im])
-        i += 1
-    ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
-    return ani
-
-
-def getImage(data, mz, nrows, ncols):
-    # collect coordinate intensity pairs
-    picDict = {}
-    for index, row in data.iterrows():
-        picDict[(index[2], index[1])] = row[mz]
-
-    # covert to image coordinates
-    xcords = [float(y) for y in list(set([x[0] for x in picDict]))]
-    ycords = [float(y) for y in list(set([x[1] for x in picDict]))]
-
-    # make output array and resize if necessary
-    outarray = np.zeros((len(xcords), len(ycords)))
-
-    xcords.sort()
-    ycords.sort()
-    xcordMap = {x: i for x, i in zip(xcords, range(len(xcords)))}
-    ycordMap = {x: i for x, i in zip(ycords, range(len(ycords)))}
-
-    # make output array
-    for [x, y], intens in picDict.items():
-        outarray[xcordMap[float(x)], ycordMap[float(y)]] = float(intens)
-    # outarray = scale(outarray, nrows, ncols)
-
-    return outarray
+def saveTIF(arr,filename):
+    im = Image.fromarray(arr)
+    im.save(filename)
 
 
 def normalizeTensor(tensorFilt):
+    normalizedTensor = np.zeros(tensorFilt.shape)
     for r in range(len(tensorFilt[0])):
         for c in range(len(tensorFilt[0][0])):
             sumInt = np.sum(tensorFilt[:, r, c])
-            tensorFilt[:, r, c] = tensorFilt[:, r, c] / max([1, sumInt])
-
+            normalizedTensor[:, r, c] = tensorFilt[:, r, c] / max([1, sumInt])
+    return normalizedTensor
 
 def getISAEq(numCarbons):
     d = {16: palmitateISA, 14: myristicISA, 18: stearicISA, 20: arachidonicISA, 22: dhaISA}
     return d[numCarbons]
 
-
-def K_means_image_split(tensor, k, dm_method="PCA", num_latent=2):
-    # go through all features in dataset
-
-    kmean = KMeans(k)
-    format_data = []
-    ind_mapper = {}
-    for r in range(len(tensor[0])):
-        for c in range(len(tensor[0][0])):
-            format_data.append(tensor[:, r, c])
-            ind_mapper[len(format_data) - 1] = (r, c)
-
-    format_data = np.array(format_data)
-    format_data = imputeRowMin(format_data)
-    format_data = np.log2(format_data)
-
-    if dm_method == "PCA":
-        plt.figure()
-        pca = PCA(n_components=num_latent)
-        format_data = pca.fit_transform(format_data)
-        if num_latent > 1:
-            plt.xlabel("PC1 (" + str(np.round(100 * pca.explained_variance_ratio_[0], 2)) + "%)")
-            plt.ylabel("PC2 (" + str(np.round(100 * pca.explained_variance_ratio_[1], 2)) + "%)")
-
-    elif dm_method == "TSNE":
-        plt.figure()
-        tsne = TSNE(n_components=2)
-        format_data = tsne.fit_transform(format_data)
-        plt.xlabel("t-SNE1")
-        plt.ylabel("t-SNE2")
-
-    labels = kmean.fit_predict(format_data)
-
-    if num_latent > 1:
-        plt.scatter(format_data[:, 0], format_data[:, 1], c=labels)
-
-    imageLabels = np.zeros(tensor[0].shape)
-    for x in range(len(labels)):
-        imageLabels[ind_mapper[x][0], ind_mapper[x][1]] = labels[x]
-
-    return imageLabels
