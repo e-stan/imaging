@@ -918,7 +918,9 @@ class MSIData():
 
         return fluxImageG,fluxImageD,fluxImageT0,fluxImageT1,fluxImageT2,T_founds,P_trues,P_preds,numFounds,errs,errors
 
-    def correctNaturalAbundance(self,formula,charge=-1):
+    def correctNaturalAbundance(self,formula):
+        if self.polarity == "positive": charge = 1
+        else: charge = -1
         args = []
         coords = []
         for r in range(self.tic_image.shape[0]):
