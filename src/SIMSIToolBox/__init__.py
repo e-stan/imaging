@@ -11,10 +11,62 @@ from sklearn.manifold import TSNE
 import pandas as pd
 from pyimzml.ImzMLParser import ImzMLParser, getionimage
 from pyimzml.ImzMLWriter import ImzMLWriter
-from multiprocessing import Pool
+from multiprocessing import Pool,Manager
 from PIL import Image
 import picor
 import molmass
+from threading import Thread
+
+
+
+def startConcurrentTask(task,args,numCores,message,total,chunksize="none",verbose=True):
+    if verbose:
+        m = Manager()
+        q = m.Queue()
+        args = [a + [q] for a in args]
+        t = Thread(target=updateProgress, args=(q, total, message))
+        t.start()
+    if numCores > 1:
+        p = Pool(numCores)
+        if chunksize == "none":
+            res = p.starmap(task, args)
+        else:
+            res = p.starmap(task, args, chunksize=chunksize)
+        p.close()
+        p.join()
+    else:
+        res = [task(*a) for a in args]
+    if verbose: t.join()
+    return res
+
+def printProgressBar(iteration, total, prefix='', suffix='', decimals=1, length=50, fill='█', printEnd="\r"):
+    """
+    Call in a loop to create terminal progress bar
+    @params:
+        iteration   - Required  : current iteration (Int)
+        total       - Required  : total iterations (Int)
+        prefix      - Optional  : prefix string (Str)
+        suffix      - Optional  : suffix string (Str)
+        decimals    - Optional  : positive number of decimals in percent complete (Int)
+        length      - Optional  : character length of bar (Int)
+        fill        - Optional  : bar fill character (Str)
+        printEnd    - Optional  : end character (e.g. "\r", "\r\n") (Str)
+    """
+    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+    filledLength = int(length * iteration // total)
+    bar = fill * filledLength + '-' * (length - filledLength)
+    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end=printEnd)
+    # Print New Line on Complete
+    if iteration == total:
+        print()
+
+def updateProgress(q, total,message = ""):
+    counter = 0
+    while counter != total:
+        if not q.empty():
+            q.get()
+            counter += 1
+            printProgressBar(counter, total,prefix = message, printEnd="")
 
 def objectiveFunc(t, p, goodInd, params=[], alpha=0, lam=0):
     trel = np.array([t[x] for x in goodInd])
@@ -659,7 +711,15 @@ def correctNaturalAbundance(vec,formula,charge = -1):
 
 
 class MSIData():
-    def __init__(self,targets,ppm,mass_range = [0,1000],numCores = 1):
+    def __init__(self,targets,ppm,mass_range = [0,1000],numCores = 1,intensityCutoff = 100):
+        """
+        Class to manage and process MSI data.
+        :param targets: list/ndarray, m/zs of interest
+        :param ppm: float, mass tolerance in ppm to extract masses
+        :param mass_range: iterable, mass range to consider
+        :param numCores: int, number of processor cores to use
+        :param intensityCutoff: float, minimum intensity to keep signal in processed data (is not used for TIC)
+        """
         self.mzs = []
         self.data_tensor = np.array([])
         self.ppm = ppm
@@ -669,24 +729,59 @@ class MSIData():
         self.mass_range = mass_range
         self.imageBoundary = -1
         self.numCores = numCores
+        self.intensityCutoff = intensityCutoff
 
 
-    def readimzML(self,filename):
+    def readimzML(self,filename,dims=None):
+        """
+        Load data from an imzml file with path filename.
+        :param filename: str, path to imzml file
+        :param dims: iterable, dimensions of image if imzml dimensions are corrupted. Optional
+        :return: None
+        """
         p = ImzMLParser(filename)  # load data
         self.polarity = p.polarity
+        if type(dims) != type(None):
+            p.imzmldict["max count of pixels x"] = dims[1]
+            p.imzmldict["max count of pixels x"] = dims[0]
+
         self.tic_image = getionimage(p, np.mean(self.mass_range), self.mass_range[1] - self.mass_range[0])
         self.data_tensor = np.zeros((len(self.targets),self.tic_image.shape[0],self.tic_image.shape[1]))
+        inds = []
+        args = []
+        total = len(p.coordinates)
+        it = 0
         for idx, (x,y,_) in enumerate(p.coordinates):
             mzs, intensities = p.getspectrum(idx)
-            spectrum = {mz:i for mz,i in zip(mzs,intensities)}
+            spectrum = {mz:i for mz,i in zip(mzs,intensities) if i > self.intensityCutoff}
             for i in range(len(self.targets)):
-                self.data_tensor[i,y-1,x-1] = extractIntensity(self.targets[i],spectrum,self.ppm,"centroid")
+                inds.append([i,y-1,x-1])
+                args.append([self.targets[i],spectrum,self.ppm,"centroid"])
+            it += 1
+            printProgressBar(it,total,"gathering spectra",printEnd="")
+
+        result = startConcurrentTask(extractIntensity,args,self.numCores,"extracting intensities",len(args))
+        for [x,y,z],intensity in zip(inds,result):
+            self.data_tensor[x,y,z] = intensity
+                #self.data_tensor[i,y-1,x-1] = extractIntensity(self.targets[i],spectrum,self.ppm,"centroid")
+
+
         self.imageBoundary = np.ones(self.tic_image.shape)
 
     def readHDIOutput(self,filename,polarity):
+        """
+        Load data from water HDI .txt output
+        :param filename: str, path to .txt file
+        :param polarity: str, "negative" or "positive" specifying the polarity of the data
+        :return: None
+        """
+
+        #read data
         data = [r.strip().split() for r in open(filename, "r").readlines()[3:]]
         data = {(x[0], float(x[1]), float(x[2])): {float(mz): float(i) for mz, i in zip(data[0], x[3:])} for x in data[1:] if
                 len(x) > 0}
+
+        #construct df
         data = pd.DataFrame.from_dict(data, orient="index")
         mzs = data.columns.values
 
@@ -714,6 +809,7 @@ class MSIData():
             for index,row in data.iterrows():
                 self.data_tensor[i,xcordMap[index[2]],ycordMap[index[1]]] += np.sum(row[matches].values)
             i += 1
+        #make tic image
         self.tic_image = np.zeros((len(xcords),len(ycords)))
 
         for index,row in data.iterrows():
@@ -724,11 +820,17 @@ class MSIData():
 
 
     def to_pandas(self):
+        """
+        reformat data as pandas df
+        :return: DataFrame, pandas dataframe with MSI data
+        """
+        #get dimensions of data
         nrows = self.data_tensor.shape[1]
         ncols = self.data_tensor.shape[2]
         ntotal = nrows * ncols
         df = pd.DataFrame(index=range(ntotal))
 
+        #construct df
         for met, i in zip(self.targets, range(len(self.data_tensor))):
             x = []
             y = []
@@ -740,22 +842,45 @@ class MSIData():
                     ints.append(self.data_tensor[i][r][c])
             df[met] = ints
 
+        #set coordinates
         df["x"] = x
         df["y"] = y
         df = df[["x", "y"] + list(df.columns.values[:-2])]
         return df
 
     def to_imzML(self,outfile):
+        """
+        Write data as imzml file
+        :param outfile: str, path to output file
+        :return: None
+        """
+
+        #open output file
         output = ImzMLWriter(outfile, polarity=self.polarity)
+
+        #format as df
         df = self.to_pandas()
+
+        #write to output file
         for id,row in df.iterrows():
             mzs = self.mzs
             sigs = [row[x] for x in self.mzs]
             output.addSpectrum(mzs,sigs,(row["x"],row["y"]))
 
+        #close output file
         output.close()
 
     def segmentImage(self,method="TIC_auto", threshold=0, num_latent=2, dm_method="PCA",fill_holes = True):
+        """
+        Segment image into sample and background
+        :param method: str, method for segmentation ("TIC auto" = find optimal separation between background and foreground based on TIC intensity, "K_means"=use K-means clustering, "TIC_manual"= use a user-defined threshold for segment image based on TIC
+        :param threshold: float, intensity threshold for TIC_manual method
+        :param num_latent: int, number of latent variables to use in dimensionality reduction prior to clustering when using K_means
+        :param dm_method: str, dimensionality reduction method to use with K_means ("PCA" or "TSNE")
+        :param fill_holes: bool, True or False depending
+        :return:
+        """
+
         # go through all features in dataset
 
         if method == "TIC_auto":
@@ -832,14 +957,10 @@ class MSIData():
         offset = int((kernal_size - 1) / 2)
         height,width = self.tic_image.shape
 
-        pool = Pool(self.numCores)
-        tensorFilt = np.array(pool.starmap(convolveLayer,
-                                           [(offset, height, width, self.data_tensor[t], self.imageBoundary, method) for t in
-                                            range(len(self.targets))]))
+        result = startConcurrentTask(convolveLayer,[(offset, height, width, self.data_tensor[t], self.imageBoundary, method) for t in
+                                            range(len(self.targets))],self.numCores,"Smoothing data",len(self.targets))
 
-
-        pool.close()
-        pool.join()
+        tensorFilt = np.array(result)
 
         tic_smoothed = convolveLayer(offset,height,width,self.tic_image,self.imageBoundary,method)
 
@@ -890,14 +1011,12 @@ class MSIData():
                     P_consider.append(P)
 
 
-        pool = Pool(self.numCores)
         if isaModel == "flexible":
-            results = pool.starmap(ISAFit, argList)
+            eq = ISAFit
         else:
-            results = pool.starmap(ISAFit_classical, argList)
+            eq = ISAFit_classical
 
-        pool.close()
-        pool.join()
+        results = startConcurrentTask(eq,argList,self.numCores,"Running ISA",len(argList))
 
         errors = []
         for (g, D, T_found, err, P_pred), (r, c), P_true in zip(results, coords, P_consider):
@@ -930,13 +1049,7 @@ class MSIData():
                     args.append([vec,formula,charge])
                     coords.append([r,c])
 
-        pool = Pool(self.numCores)
-
-        results = pool.starmap(correctNaturalAbundance, args)
-        #results = [correctNaturalAbundance(*a) for a in args]
-
-        pool.close()
-        pool.join()
+        results = startConcurrentTask(correctNaturalAbundance,args,self.numCores,"correcting natural abundance",len(args))
 
         for corr,(x,y) in zip(results,coords):
             self.data_tensor[:,x,y] = corr
@@ -954,7 +1067,7 @@ def getMzsOfIsotopologues(formula,elementOfInterest = "C"):
     mzsOI = [m0Mz + 1.00336 * x for x in range(numCarbons + 1)]
     return m0Mz,mzsOI,numCarbons
 
-def extractIntensity(mz, spectrum, ppm, mode="profile"):
+def extractIntensity(mz, spectrum, ppm, mode="profile",q=None):
     if mode == "centroid":
         width = ppm * mz / 1e6
     else:
@@ -962,6 +1075,10 @@ def extractIntensity(mz, spectrum, ppm, mode="profile"):
     mz_start = mz - width
     mz_end = mz + width
     intensity = np.sum([i for mz, i in spectrum.items() if mz > mz_start and mz < mz_end])
+
+    if type(q) != type(None):
+        q.put(0)
+
     return intensity
 
 def showImage(arr,cmap):
