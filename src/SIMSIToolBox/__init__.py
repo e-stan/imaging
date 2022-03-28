@@ -78,7 +78,7 @@ def objectiveFunc(t, p, goodInd, params=[], alpha=0, lam=0):
     return np.sum(np.square(np.subtract(trel, prel))) + alpha * lam * np.sum(np.abs(params)) + (
                 1 - alpha) / 2 * lam * np.sum(np.square(params))
 
-def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False):
+def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False,q=None):
     success = False
     initial_params = np.concatenate((x_init, T), axis=None)
     while not success:
@@ -132,6 +132,10 @@ def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False):
         plt.ylim((0, 1))
         plt.xlabel("D")
         plt.ylabel("g(t)")
+
+    if type(q) != type(None):
+        q.put(0)
+
     return g, D, T, err, P_pred
 
 
@@ -286,7 +290,7 @@ def integrated_X(T, N, k2):
 #     return g, D, T, err, P_pred
 
 
-def ISAFit_classical(T, N, P, func, goodInd, x_init=np.random.random((2)), plot=False):
+def ISAFit_classical(T, N, P, func, goodInd, x_init=np.random.random((2)), plot=False,q=None):
     success = False
     initial_params = x_init
     while not success:
@@ -339,10 +343,14 @@ def ISAFit_classical(T, N, P, func, goodInd, x_init=np.random.random((2)), plot=
         plt.ylim((0, 1))
         plt.xlabel("D")
         plt.ylabel("g(t)")
+
+    if type(q) != type(None):
+        q.put(0)
+
     return g, D, T, err, P_pred
 
 
-def convolveLayer(offset, height, width, layer, imageBoundary, method="MA"):
+def convolveLayer(offset, height, width, layer, imageBoundary, method="MA",q=None):
     # iterate through pixels
     if method == "MA":
         tensorFilt = np.zeros((height - 2 * offset, width - 2 * offset))
@@ -354,6 +362,9 @@ def convolveLayer(offset, height, width, layer, imageBoundary, method="MA"):
                 tensorFilt[r - offset, c - offset] = np.sum(np.multiply(tempMat, coef))
     elif method == "GB":
         tensorFilt = ndimage.gaussian_filter(layer, offset)
+
+    if type(q) != type(None):
+        q.put(0)
 
     return tensorFilt
 
@@ -703,11 +714,28 @@ def dhaISA(e, D, T, N, P):
 
     return P
 
-def correctNaturalAbundance(vec,formula,charge = -1):
+def correctNaturalAbundance(vec,formula,charge = -1,q=None):
     data = pd.DataFrame(data=vec.reshape(1, -1), index=[0],
                         columns=["No label"] + [str(x + 1) + "C13" for x in range(len(vec) - 1)])
     vec_cor = picor.calc_isotopologue_correction(data, molecule_formula=formula, molecule_charge=charge,resolution_correction=False).values[0]#,resolution=resolution,mz_calibration=res_mz).values[0]
+
+    if type(q) != type(None):
+        q.put(0)
+
     return vec_cor
+
+def convertSpectraArraysToDict(mzs,inten,thresh):
+    return {mz:i for mz,i in zip(mzs,inten) if i > thresh}
+
+def convertSpectraAndExtractIntensity(mzs,inten,thresh,targets,ppm,dtype,q=None):
+    spec = convertSpectraArraysToDict(mzs,inten,thresh)
+    intensities = np.array([extractIntensity(mz,spec,ppm,dtype) for mz in targets])
+
+    if type(q) != type(None):
+        q.put(0)
+
+    return intensities
+
 
 
 class MSIData():
@@ -720,7 +748,6 @@ class MSIData():
         :param numCores: int, number of processor cores to use
         :param intensityCutoff: float, minimum intensity to keep signal in processed data (is not used for TIC)
         """
-        self.mzs = []
         self.data_tensor = np.array([])
         self.ppm = ppm
         self.polarity = 0
@@ -742,29 +769,22 @@ class MSIData():
         p = ImzMLParser(filename)  # load data
         self.polarity = p.polarity
         if type(dims) != type(None):
-            p.imzmldict["max count of pixels x"] = dims[1]
             p.imzmldict["max count of pixels x"] = dims[0]
+            p.imzmldict["max count of pixels y"] = dims[1]
 
         self.tic_image = getionimage(p, np.mean(self.mass_range), self.mass_range[1] - self.mass_range[0])
         self.data_tensor = np.zeros((len(self.targets),self.tic_image.shape[0],self.tic_image.shape[1]))
         inds = []
         args = []
-        total = len(p.coordinates)
-        it = 0
+
         for idx, (x,y,_) in enumerate(p.coordinates):
             mzs, intensities = p.getspectrum(idx)
-            spectrum = {mz:i for mz,i in zip(mzs,intensities) if i > self.intensityCutoff}
-            for i in range(len(self.targets)):
-                inds.append([i,y-1,x-1])
-                args.append([self.targets[i],spectrum,self.ppm,"centroid"])
-            it += 1
-            printProgressBar(it,total,"gathering spectra",printEnd="")
+            args.append([mzs,intensities,self.intensityCutoff,self.targets,self.ppm,"centroid"])
+            inds.append([y-1,x-1])
 
-        result = startConcurrentTask(extractIntensity,args,self.numCores,"extracting intensities",len(args))
-        for [x,y,z],intensity in zip(inds,result):
-            self.data_tensor[x,y,z] = intensity
-                #self.data_tensor[i,y-1,x-1] = extractIntensity(self.targets[i],spectrum,self.ppm,"centroid")
-
+        result = startConcurrentTask(convertSpectraAndExtractIntensity,args,self.numCores,"extracting intensities",len(args))
+        for [x,y],intensities in zip(inds,result):
+            self.data_tensor[:,x,y] = intensities
 
         self.imageBoundary = np.ones(self.tic_image.shape)
 
@@ -842,11 +862,43 @@ class MSIData():
                     ints.append(self.data_tensor[i][r][c])
             df[met] = ints
 
+        imageBoundary = []
+        tic = []
+        for r in range(nrows):
+            for c in range(ncols):
+                imageBoundary.append(self.imageBoundary[r,c])
+                tic.append(self.tic_image[r,c])
+
+
         #set coordinates
+        df["tic"] = tic
+        df["boundary"] = imageBoundary
         df["x"] = x
         df["y"] = y
+
         df = df[["x", "y"] + list(df.columns.values[:-2])]
+
         return df
+
+    def from_pandas(self,df,polarity):
+        self.polarity = polarity
+        targetsFound = [x for x in df.columns.values if x not in ["x","y","tic","boundary"]]
+        xdim = len(set(df["x"].values))
+        ydim = len(set(df["y"].values))
+        self.data_tensor = np.zeros((len(self.targets),ydim,xdim))
+        self.imageBoundary = np.zeros((ydim,xdim))
+        self.tic_image = np.zeros((ydim,xdim))
+
+        mapper = {mz:[col for col in targetsFound if 1e6 * np.abs(float(col)-mz)/mz < self.ppm] for mz in self.targets}
+
+        for index,row in df.iterrows():
+            for x in range(len(self.targets)):
+                matches = mapper[self.targets[x]]
+                i = np.sum(row[matches].values)
+                self.data_tensor[x,int(row["y"]),int(row["x"])] = i
+                self.tic_image[int(row["y"]),int(row["x"])] = row["tic"]
+                self.imageBoundary[int(row["y"]),int(row["x"])] = row["boundary"]
+
 
     def to_imzML(self,outfile):
         """
@@ -863,8 +915,8 @@ class MSIData():
 
         #write to output file
         for id,row in df.iterrows():
-            mzs = self.mzs
-            sigs = [row[x] for x in self.mzs]
+            mzs = self.targets
+            sigs = [row[x] for x in self.targets]
             output.addSpectrum(mzs,sigs,(row["x"],row["y"]))
 
         #close output file
@@ -957,7 +1009,7 @@ class MSIData():
         offset = int((kernal_size - 1) / 2)
         height,width = self.tic_image.shape
 
-        result = startConcurrentTask(convolveLayer,[(offset, height, width, self.data_tensor[t], self.imageBoundary, method) for t in
+        result = startConcurrentTask(convolveLayer,[[offset, height, width, self.data_tensor[t], self.imageBoundary, method] for t in
                                             range(len(self.targets))],self.numCores,"Smoothing data",len(self.targets))
 
         tensorFilt = np.array(result)
@@ -1006,7 +1058,7 @@ class MSIData():
                 if self.imageBoundary[r, c] > .5:
                     # fit ISA
                     numFounds.append(len(goodInd))
-                    argList.append((T, N, P, func, goodInd, .5))  # np.random.random(1)))
+                    argList.append((T, N, P, func, goodInd, .5,False))  # np.random.random(1)))
                     coords.append((r, c))
                     P_consider.append(P)
 
