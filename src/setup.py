@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name='SIMSIToolBox',  # How you named your package folder (MyLib)
     packages=["SIMSIToolBox"],  # Chose the same as "name"
-    version='0.0.4',  # Start with a small number and increase it with every change you make
+    version='0.0.5',  # Start with a small number and increase it with every change you make
     license='MIT',  # Chose a license from here: https://help.github.com/articles/licensing-a-repository
     description='Functions for analysis of stable isotope labeling mass spectrometry imaging data',  # Give a short description about your library
     author='Ethan Stancliffe',  # Type in your name
