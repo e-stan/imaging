@@ -349,11 +349,11 @@ def ISAFit_classical(T, N, P, func, goodInd, x_init=np.random.random((2)), plot=
 
     return g, D, T, err, P_pred
 
-def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=False,q=None):
+def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False,q=None):
     sol = opt.minimize(
         lambda x: objectiveFunc(P, func(x[0], 1.0, T, N, P), goodInd),
         x0=x_init)
-    g, D = sol.x[:2]
+    g = sol.x[:1]
     D = 1.0
     err = sol.fun
     P_pred = func(g, D, T, N, P)
@@ -364,9 +364,10 @@ def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=
     x_ind = 0
     x_lab = []
     i = 0
-    maxY = np.max(np.concatenate((P, P_pred)))
 
     if plot:
+        maxY = np.max(np.concatenate((P, P_pred)))
+
         for p, pp in zip(P, P_pred):
             plt.bar([x_ind, x_ind + 1], [p, pp],color=["black","red"])
             x_lab.append([x_ind + .5, "M+" + str(i)])
