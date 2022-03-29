@@ -349,6 +349,57 @@ def ISAFit_classical(T, N, P, func, goodInd, x_init=np.random.random((2)), plot=
 
     return g, D, T, err, P_pred
 
+def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((2, 1)), plot=False,q=None):
+    sol = opt.minimize(
+        lambda x: objectiveFunc(P, func(x[0], 1.0, T, N, P), goodInd),
+        x0=x_init)
+    g, D = sol.x[:2]
+    D = 1.0
+    err = sol.fun
+    P_pred = func(g, D, T, N, P)
+    P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
+    for x in range(len(P_pred)):
+        if x not in goodInd:
+            P_pred[x] = 0
+    x_ind = 0
+    x_lab = []
+    i = 0
+    maxY = np.max(np.concatenate((P, P_pred)))
+
+    if plot:
+        for p, pp in zip(P, P_pred):
+            plt.bar([x_ind, x_ind + 1], [p, pp],color=["black","red"])
+            x_lab.append([x_ind + .5, "M+" + str(i)])
+            x_ind += 4
+            i += 1
+        plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
+        plt.scatter([-1], [-1], c="red", label="Predicted")
+        plt.scatter([-1], [-1], c="black", label="Measured")
+        plt.legend()
+        plt.ylim((0, maxY))
+        plt.xlim((-2, x_ind + 1))
+
+        plt.figure()
+
+        # plot solution curves
+        D_test = np.linspace(0, 1, 25)
+        for pp in range(len(P)):
+            g_test = []
+            for d in D_test:
+                sol = opt.minimize(lambda x: abs(P[pp] - func(x[0], d, T, N, P)[pp]), x0=[g])
+                g_test.append(sol.x[0])
+            plt.plot(D_test, g_test, c="black")
+
+        plt.scatter([D], [g], color="red")
+        plt.ylim((0, 1))
+        plt.xlabel("D")
+        plt.ylabel("g(t)")
+
+    if type(q) != type(None):
+        q.put(0)
+
+    return g, D, T, err, P_pred
+
 
 def convolveLayer(offset, height, width, layer, imageBoundary, method="MA",q=None):
     # iterate through pixels
@@ -1020,7 +1071,7 @@ class MSIData():
         self.data_tensor = tensorFilt
         self.tic_image = tic_smoothed
 
-    def runISA(self,isaModel="flexible",T=[0,0,1]):
+    def runISA(self,isaModel="flexible",T=[0,0,1],X_image = None):
         c13ab = 0.011  # natural abundance
         N = [(1 - c13ab) ** 2, 2 * (1 - c13ab) * c13ab,
              c13ab ** 2]  # get expected labeling of precursor from natural abundance
@@ -1058,15 +1109,22 @@ class MSIData():
                 if self.imageBoundary[r, c] > .5:
                     # fit ISA
                     numFounds.append(len(goodInd))
-                    argList.append((T, N, P, func, goodInd, .5,False))  # np.random.random(1)))
+                    a = [T, N, P, func, goodInd, .5,False]
                     coords.append((r, c))
                     P_consider.append(P)
-
+                    if isaModel == "dual":
+                        a[0] = X_image[:,r,c]
+                    argList.append(a)  # np.random.random(1)))
 
         if isaModel == "flexible":
             eq = ISAFit
-        else:
+        elif isaModel == "classical":
             eq = ISAFit_classical
+        elif isaModel == "dual":
+            eq = ISAFit_knownT
+        else:
+            print("ISA model not recognized")
+            return -1
 
         results = startConcurrentTask(eq,argList,self.numCores,"Running ISA",len(argList))
 
