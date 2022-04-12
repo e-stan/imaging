@@ -969,7 +969,7 @@ class MSIData():
         for id,row in df.iterrows():
             mzs = self.targets
             sigs = [row[x] for x in self.targets]
-            output.addSpectrum(mzs,sigs,(row["x"],row["y"]))
+            output.addSpectrum(mzs,sigs,(int(row["x"]),int(row["y"])))
 
         #close output file
         output.close()
