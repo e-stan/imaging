@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
     files = [x for x in os.listdir(inpath) if ".imzml" in x]
     for file in files:
-        #if file.replace(".imzml",".csv") not in os.listdir(outpath):
+        if file.replace(".imzml",".csv") not in os.listdir(outpath):
             print(file)
             dim = file.split("_")[2]
             dim = (int(dim.split("w")[0]),int(dim.split("w")[1][:-1]))
