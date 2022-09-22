@@ -7,9 +7,9 @@ inpath = "X:/MSI_Shared_Data/13CImagingManuscript/raw_data/imzmls/"
 #inpath = "X:/Kevin/Bruker/MALDI/imzML/"
 outpath = "X:/MSI_Shared_Data/13CImagingManuscript/raw_data/imzmls/subset_data/"
 #outpath = inpath + "processed_data/"
-metabolites = ["C6H8NO5","C6H12O9P","C16H31O2","C20H31O2","C5H8NO4"]
+metabolites = ["C6H8NO5","C6H12O9P","C16H31O2","C20H31O2","C5H8NO4","C6H11O6"]
 
-ppmThresh = 20
+ppmThresh = 15
 num_cores = 20
 intensityCutoff = 0
 convSquare = 1 #size of filter (1=1x1,3=3x3,5=5x5)
@@ -32,8 +32,8 @@ if __name__ == "__main__":
     for file in files:
         if file.replace(".imzml",".csv").replace(".imzML",".csv") not in os.listdir(outpath):
             print(file)
-            dim = file.split("_")[2]
-            dim = (int(dim.split("w")[0]),int(dim.split("w")[1][:-1]))
+            #dim = file.split("_")[2]
+            #dim = (int(dim.split("w")[0]),int(dim.split("w")[1][:-1]))
             msi = SIMSIToolBox.MSIData(mzs,ppm=ppmThresh,numCores = num_cores,intensityCutoff=intensityCutoff)
             #msi.readimzML(inpath+file)
             msi.readimzML(inpath+file, dim)

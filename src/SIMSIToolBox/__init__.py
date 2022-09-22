@@ -16,6 +16,42 @@ from PIL import Image
 import picor
 import molmass
 from threading import Thread
+from bisect import bisect_left
+from bisect import insort_left
+
+def take_closest(myList, myNumber):
+    """
+    Assumes myList is sorted. Returns closest value to myNumber.
+
+    If two numbers are equally close, return the smallest number.
+    """
+    pos = bisect_left(myList, myNumber)
+    if pos == 0:
+        return myList[0]
+    if pos == len(myList):
+        return myList[-1]
+    before = myList[pos - 1]
+    after = myList[pos]
+    if after - myNumber < myNumber - before:
+        return after
+    else:
+        return before
+
+
+def mergeMzLists(old, new, ppm):
+    old.sort()
+    for x in new:
+        if len(old) > 0:
+            width = ppm * x / 1e6
+            mi = x - width
+            ma = x + width
+            closest = take_closest(old,x)
+            if closest < mi or closest > ma:
+                insort_left(old,x)
+        else:
+            old.append(x)
+
+    return old
 
 
 
@@ -721,6 +757,15 @@ def arachidonicISA(e, D, T, N, P):
 
     return P
 
+def getIonImageWrapper(p,mz,tol,q=None):
+
+    val = getionimage(p,mz,tol)
+
+    if q != None:
+        q.put([])
+
+    return val
+
 
 def dhaISA(e, D, T, N, P):
     # define tracer and naturual abundance isotopomers
@@ -788,8 +833,6 @@ def convertSpectraAndExtractIntensity(mzs,inten,thresh,targets,ppm,dtype,q=None)
 
     return intensities
 
-
-
 class MSIData():
     def __init__(self,targets,ppm,mass_range = [0,1000],numCores = 1,intensityCutoff = 100):
         """
@@ -826,17 +869,21 @@ class MSIData():
 
         self.tic_image = getionimage(p, np.mean(self.mass_range), self.mass_range[1] - self.mass_range[0])
         self.data_tensor = np.zeros((len(self.targets),self.tic_image.shape[0],self.tic_image.shape[1]))
-        inds = []
-        args = []
 
-        for idx, (x,y,_) in enumerate(p.coordinates):
-            mzs, intensities = p.getspectrum(idx)
-            args.append([mzs,intensities,self.intensityCutoff,self.targets,self.ppm,"centroid"])
-            inds.append([y-1,x-1])
+        args = [[p,x,self.ppm*x/1e6] for x in self.targets]
+        self.data_tensor = np.array(startConcurrentTask(getionimage,args,self.numCores,"extracting intensities",len(args)))
 
-        result = startConcurrentTask(convertSpectraAndExtractIntensity,args,self.numCores,"extracting intensities",len(args))
-        for [x,y],intensities in zip(inds,result):
-            self.data_tensor[:,x,y] = intensities
+        # inds = []
+        # args = []
+        #
+        # for idx, (x,y,_) in enumerate(p.coordinates):
+        #     mzs, intensities = p.getspectrum(idx)
+        #     args.append([mzs,intensities,self.intensityCutoff,self.targets,self.ppm,"centroid"])
+        #     inds.append([y-1,x-1])
+        #
+        # result = startConcurrentTask(convertSpectraAndExtractIntensity,args,self.numCores,"extracting intensities",len(args))
+        # for [x,y],intensities in zip(inds,result):
+        #     self.data_tensor[:,x,y] = intensities
 
         self.imageBoundary = np.ones(self.tic_image.shape)
 
@@ -850,7 +897,7 @@ class MSIData():
 
         #read data
         data = [r.strip().split() for r in open(filename, "r").readlines()[3:]]
-        data = {(x[0], float(x[1]), float(x[2])): {float(mz): float(i) for mz, i in zip(data[0], x[3:])} for x in data[1:] if
+        data = {(x[0], float(x[1]), float(x[2])): {float(mz): float(i) for mz, i in zip(data[0], x[3:]) if float(i) > self.intensityCutoff} for x in data[1:] if
                 len(x) > 0}
 
         #construct df
@@ -900,19 +947,20 @@ class MSIData():
         nrows = self.data_tensor.shape[1]
         ncols = self.data_tensor.shape[2]
         ntotal = nrows * ncols
-        df = pd.DataFrame(index=range(ntotal))
+        df = pd.DataFrame(index=range(ntotal),columns=self.targets)
 
         #construct df
         for met, i in zip(self.targets, range(len(self.data_tensor))):
             x = []
             y = []
-            ints = []
+            ii = 0
             for r in range(nrows):
                 for c in range(ncols):
                     x.append(c)
                     y.append(r)
-                    ints.append(self.data_tensor[i][r][c])
-            df[met] = ints
+                    df.at[ii,met] = self.data_tensor[i][r][c]
+                    ii += 1
+
 
         imageBoundary = []
         tic = []
@@ -932,24 +980,39 @@ class MSIData():
 
         return df
 
+    @staticmethod
+    def parse_df_to_matrix(df,cols,intensityCutoff,dims,q=None):
+        arr = np.zeros(dims)
+        for index,row in df.iterrows():
+            i = np.sum(row[cols].values)
+            if i > intensityCutoff:
+                arr[int(row["y"]),int(row["x"])] = i
+
+        if type(q) != type(None):
+            q.put([])
+
+        return arr
+
+
+
     def from_pandas(self,df,polarity):
         self.polarity = polarity
         targetsFound = [x for x in df.columns.values if x not in ["x","y","tic","boundary"]]
         xdim = len(set(df["x"].values))
         ydim = len(set(df["y"].values))
-        self.data_tensor = np.zeros((len(self.targets),ydim,xdim))
-        self.imageBoundary = np.zeros((ydim,xdim))
-        self.tic_image = np.zeros((ydim,xdim))
 
         mapper = {mz:[col for col in targetsFound if 1e6 * np.abs(float(col)-mz)/mz < self.ppm] for mz in self.targets}
 
-        for index,row in df.iterrows():
-            for x in range(len(self.targets)):
-                matches = mapper[self.targets[x]]
-                i = np.sum(row[matches].values)
-                self.data_tensor[x,int(row["y"]),int(row["x"])] = i
-                self.tic_image[int(row["y"]),int(row["x"])] = row["tic"]
-                self.imageBoundary[int(row["y"]),int(row["x"])] = row["boundary"]
+        args = [[df[["x","y"] + mapper[x]],mapper[x],self.intensityCutoff,(ydim,xdim)] for x in self.targets]
+        args.append([df[["x","y","tic"]],["tic"],0,(ydim,xdim)])
+        args.append([df[["x","y","boundary"]],["boundary"],-1,(ydim,xdim)])
+        res = np.array(startConcurrentTask(MSIData.parse_df_to_matrix,args,self.numCores,
+                                                        "reading csv",len(args)))
+
+        self.tic_image = res[-2]
+        self.imageBoundary = res[-1]
+
+        self.data_tensor = np.array(res[:-2])
 
 
     def to_imzML(self,outfile):
