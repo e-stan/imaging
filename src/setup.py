@@ -3,13 +3,13 @@ from setuptools import setup, find_packages
 setup(
     name='SIMSIToolBox',  # How you named your package folder (MyLib)
     packages=["SIMSIToolBox"],  # Chose the same as "name"
-    version='0.0.6',  # Start with a small number and increase it with every change you make
+    version='0.0.7',  # Start with a small number and increase it with every change you make
     license='MIT',  # Chose a license from here: https://help.github.com/articles/licensing-a-repository
     description='Functions for analysis of stable isotope labeling mass spectrometry imaging data',  # Give a short description about your library
     author='Ethan Stancliffe',  # Type in your name
     author_email='estancl1234@gmail.com',  # Type in your E-Mail
     url='https://github.com/e-stan/imaging/',  # Provide either the link to your github or to your website
-    download_url='https://github.com/e-stan/imaging/archive/v0.0.5.tar.gz',  # I explain this later on
+    download_url='https://github.com/e-stan/imaging/archive/v0.0.7.tar.gz',  # I explain this later on
     keywords=['Metabolomics', 'Mass Spectrometry Imaging', "Stable Isotope Labeling"],  # Keywords that define your package best
     install_requires=[  # I get to this in a second
         'numpy',
