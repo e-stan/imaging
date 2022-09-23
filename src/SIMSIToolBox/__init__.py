@@ -38,6 +38,8 @@ def take_closest(myList, myNumber):
         return before
 
 
+
+
 def mergeMzLists(old, new, ppm):
     old.sort()
     for x in new:
@@ -757,14 +759,6 @@ def arachidonicISA(e, D, T, N, P):
 
     return P
 
-def getIonImageWrapper(p,mz,tol,q=None):
-
-    val = getionimage(p,mz,tol)
-
-    if q != None:
-        q.put([])
-
-    return val
 
 
 def dhaISA(e, D, T, N, P):
@@ -825,13 +819,43 @@ def convertSpectraArraysToDict(mzs,inten,thresh):
     return {mz:i for mz,i in zip(mzs,inten) if i > thresh}
 
 def convertSpectraAndExtractIntensity(mzs,inten,thresh,targets,ppm,dtype,q=None):
-    spec = convertSpectraArraysToDict(mzs,inten,thresh)
-    intensities = np.array([extractIntensity(mz,spec,ppm,dtype) for mz in targets])
+    #spec = convertSpectraArraysToDict(mzs,inten,thresh)
+    #intensities = np.array([extractIntensity(mz,spec,ppm,dtype) for mz in targets])
+
+    intensities = []
+
+    order = list(range(len(mzs)))
+    order.sort(key=lambda x:mzs[x])
+
+    mzs = [mzs[x] for x in order]
+    inten = [inten[x] for x in order]
+
+
+    for mz in targets:
+        width = ppm * mz / 1e6
+        mz_start = mz - width
+        mz_end = mz + width
+        Origpos = bisect_left(mzs, mz)
+        pos = int(Origpos)
+        val = 0
+        while pos >= 0 and mzs[pos] > mz_start:
+            if inten[pos] > thresh:
+                val += inten[pos]
+            pos -= 1
+
+        pos = int(Origpos)
+        while pos < len(mzs) and mzs[pos] < mz_end:
+            if inten[pos] > thresh:
+                val += inten[pos]
+            pos += 1
+
+
+        intensities.append(val)
 
     if type(q) != type(None):
         q.put(0)
 
-    return intensities
+    return np.array(intensities)
 
 class MSIData():
     def __init__(self,targets,ppm,mass_range = [0,1000],numCores = 1,intensityCutoff = 100):
@@ -870,20 +894,20 @@ class MSIData():
         self.tic_image = getionimage(p, np.mean(self.mass_range), self.mass_range[1] - self.mass_range[0])
         self.data_tensor = np.zeros((len(self.targets),self.tic_image.shape[0],self.tic_image.shape[1]))
 
-        args = [[p,x,self.ppm*x/1e6] for x in self.targets]
-        self.data_tensor = np.array(startConcurrentTask(getionimage,args,self.numCores,"extracting intensities",len(args)))
+        #args = [[p,x,self.ppm*x/1e6] for x in self.targets]
+        #self.data_tensor = np.array(startConcurrentTask(getionimage,args,1,"extracting intensities",len(args)))
 
-        # inds = []
-        # args = []
-        #
-        # for idx, (x,y,_) in enumerate(p.coordinates):
-        #     mzs, intensities = p.getspectrum(idx)
-        #     args.append([mzs,intensities,self.intensityCutoff,self.targets,self.ppm,"centroid"])
-        #     inds.append([y-1,x-1])
-        #
-        # result = startConcurrentTask(convertSpectraAndExtractIntensity,args,self.numCores,"extracting intensities",len(args))
-        # for [x,y],intensities in zip(inds,result):
-        #     self.data_tensor[:,x,y] = intensities
+        inds = []
+        args = []
+
+        for idx, (x,y,_) in enumerate(p.coordinates):
+            mzs, intensities = p.getspectrum(idx)
+            args.append([mzs,intensities,self.intensityCutoff,self.targets,self.ppm,"centroid"])
+            inds.append([y-1,x-1])
+
+        result = startConcurrentTask(convertSpectraAndExtractIntensity,args,self.numCores,"extracting intensities",len(args))
+        for [x,y],intensities in zip(inds,result):
+            self.data_tensor[:,x,y] = intensities
 
         self.imageBoundary = np.ones(self.tic_image.shape)
 

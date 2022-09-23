@@ -14,9 +14,13 @@ from copy import deepcopy
 
 
 datadir = "X:/MSI_Shared_Data/13CImagingManuscript/raw_data/imzmls/subset_data/"
-fn = "20220921_01_105w72h_mt_tumor_brain1-5_12C_10um Analyte 1_1.csv"
+datadir = "X:/Kevin/Bruker/MALDI/imzML/processed_data/"
+fn = "20220816_01_80w69h_03C_mt_tumor_brain4-1_13C_20um Analyte 2_1.csv"
+fn = "brain_c12_nedc_neg_40um.csv"
 
-metabolites = ["C6H8NO5","C6H12O9P","C16H31O2","C20H31O2","C5H8NO4"]
+metabolites = ["C6H8NO5","C6H12O9P","C16H31O2","C20H31O2","C5H8NO4","C6H11O6"]
+#metabolites = ["C6H12O9P"]
+
 #metabolites = ["C5H8NO4"]
 
 polarity="negative"
@@ -27,10 +31,10 @@ filt = "GB" #filtering method (GB = gaussian blur, MA = moving average)
 convSquare = 3
 
 if __name__ == "__main__":
-    df = pd.read_csv(datadir + fn, index_col=0)
     for formula in metabolites:
         m0Mz,mzsOI,numCarbons = SIMSIToolBox.getMzsOfIsotopologues(formula,elementOfInterest="C")
-        msi = SIMSIToolBox.MSIData(mzsOI,ppm=ppmThresh,numCores = num_cores,intensityCutoff=50)
+        msi = SIMSIToolBox.MSIData(mzsOI,ppm=ppmThresh,numCores = num_cores,intensityCutoff=0)
+        df = pd.read_csv(datadir + fn,index_col=0)
         msi.from_pandas(df,polarity)
         msi.smoothData(filt, convSquare)
         poolSize = np.sum(msi.data_tensor / msi.tic_image, axis=0)

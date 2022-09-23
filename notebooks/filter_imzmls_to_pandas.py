@@ -9,7 +9,7 @@ outpath = "X:/MSI_Shared_Data/13CImagingManuscript/raw_data/imzmls/subset_data/"
 #outpath = inpath + "processed_data/"
 metabolites = ["C6H8NO5","C6H12O9P","C16H31O2","C20H31O2","C5H8NO4"]
 
-ppmThresh = 20
+ppmThresh = 15
 num_cores = 20
 intensityCutoff = 0
 convSquare = 1 #size of filter (1=1x1,3=3x3,5=5x5)
