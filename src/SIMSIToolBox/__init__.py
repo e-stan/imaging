@@ -836,15 +836,21 @@ def convertSpectraAndExtractIntensity(mzs,inten,thresh,targets,ppm,dtype,q=None)
         mz_start = mz - width
         mz_end = mz + width
         Origpos = bisect_left(mzs, mz)
+        if Origpos == len(mzs):
+            Origpos -= 1
         pos = int(Origpos)
         val = 0
-        while pos >= 0 and mzs[pos] > mz_start:
+        while pos >= 0:
+            if mzs[pos] < mz_start:
+                break
             if inten[pos] > thresh:
                 val += inten[pos]
             pos -= 1
 
         pos = int(Origpos)
-        while pos < len(mzs) and mzs[pos] < mz_end:
+        while pos < len(mzs):
+            if mzs[pos] > mz_end:
+                break
             if inten[pos] > thresh:
                 val += inten[pos]
             pos += 1
@@ -1235,7 +1241,9 @@ class MSIData():
 
         return fluxImageG,fluxImageD,fluxImageT0,fluxImageT1,fluxImageT2,T_founds,P_trues,P_preds,numFounds,errs,errors
 
-    def correctNaturalAbundance(self,formula):
+    def correctNaturalAbundance(self,formula,inds=None):
+        if type(inds) == type(None):
+            inds = list(range(len(self.targets)))
         if self.polarity == "positive": charge = 1
         else: charge = -1
         args = []
@@ -1243,14 +1251,14 @@ class MSIData():
         for r in range(self.tic_image.shape[0]):
             for c in range(self.tic_image.shape[1]):
                 if self.imageBoundary[r,c] > 0.5:
-                    vec = self.data_tensor[:,r,c]
+                    vec = self.data_tensor[inds,r,c]
                     args.append([vec,formula,charge])
                     coords.append([r,c])
 
         results = startConcurrentTask(correctNaturalAbundance,args,self.numCores,"correcting natural abundance",len(args))
 
         for corr,(x,y) in zip(results,coords):
-            self.data_tensor[:,x,y] = corr
+            self.data_tensor[inds,x,y] = corr
 
 def getMzsOfIsotopologues(formula,elementOfInterest = "C"):
     # calculate relevant m/z's
