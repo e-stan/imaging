@@ -18,6 +18,12 @@ import molmass
 from threading import Thread
 from bisect import bisect_left
 from bisect import insort_left
+import random as rd
+
+
+def splitList(l, n):
+    n = int(np.ceil(len(l)/float(n)))
+    return list([l[i:i + n] for i in range(0, len(l), n)])
 
 def take_closest(myList, myNumber):
     """
@@ -229,103 +235,6 @@ def parameterizedIntegrand(t, N, G, k1, k2, T, func):
 def integrated_X(T, N, k2):
     t = 1
     return d_t(t, 1, k2) * np.array(T) + (1 - d_t(t, 1, k2)) * np.array(N)
-
-#
-# def ISAFit_nonSS(T, N, P, numC, goodInd, x_init=np.random.random((3)), plot=False):
-#     success = False
-#
-#     initial_params = np.concatenate((x_init, T), axis=None)
-#     while not success:
-#         sol = opt.minimize(
-#             lambda x: objectiveFunc(P, integratedISA(x[0], x[1], x[2], [x[3], x[4], x[5]], N, numC), goodInd,
-#                                     [x[0], x[4] / np.sum(x[3:]), x[5] / np.sum(x[3:])], alpha=0, lam=1e-2),
-#             x0=initial_params,
-#             bounds=[(0, m) for m in [1, np.inf, np.inf, np.inf, np.inf, np.inf]])
-#         if not sol.success:
-#             print("failed")
-#             initial_params = np.random.random(initial_params.shape)
-#         else:
-#             success = True
-#     # g, D = sol.x[:2]
-#     g = full_g_t(1, sol.x[0], sol.x[1])
-#     D = d_t(1, 1, sol.x[2])
-#     T = sol.x[3:]
-#     T = T / np.sum(T)
-#
-#     err = sol.fun
-#     P_pred = integratedISA(sol.x[0], sol.x[1], sol.x[2], T, N, numC)
-#     P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
-#     for x in range(len(P_pred)):
-#         if x not in goodInd:
-#             P_pred[x] = 0
-#     x_ind = 0
-#     x_lab = []
-#     maxY = np.max(np.concatenate((P, P_pred)))
-#     i = 0
-#     if plot:
-#         for p, pp in zip(P, P_pred):
-#             plt.bar([x_ind, x_ind + 1], [p, pp], color=["black", "red"])
-#             x_lab.append([x_ind + .5, "M+" + str(i)])
-#             x_ind += 4
-#             i += 1
-#         plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
-#         plt.scatter([-1], [-1], c="red", label="Predicted")
-#         plt.scatter([-1], [-1], c="black", label="Measured")
-#         plt.legend()
-#         plt.ylim((0, maxY))
-#         plt.xlim((-2, x_ind + 1))
-#
-#     T = integrated_X(T, N, sol.x[2])
-#     return g, D, T, err, P_pred
-#
-#
-# def ISAFit_nonSS_full(T, N, P, numC, goodInd, x_init=np.random.random((5)), plot=False):
-#     success = False
-#
-#     initial_params = np.concatenate((x_init, T), axis=None)
-#     while not success:
-#         sol = opt.minimize(
-#             lambda x: objectiveFunc(P, integratedISAFull(x[0], x[1], x[2], x[3], x[4], x[5:], N, numC), goodInd),
-#             x0=initial_params,
-#             bounds=[(0, m) for m in [1, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf]])
-#         if not sol.success:
-#             print("failed")
-#             initial_params = np.random.random(initial_params.shape)
-#         else:
-#             success = True
-#     # g, D = sol.x[:2]
-#     g = full_g_t(1, sol.x[0], sol.x[1])
-#     D = 1.0
-#     T = sol.x[5:]
-#     # T[0] = 1-T[0]
-#     T = T / np.sum(T)
-#
-#     err = sol.fun
-#     P_pred = integratedISAFull(sol.x[0], sol.x[1], sol.x[2], sol.x[3], sol.x[4], sol.x[5:], N, numC)
-#     P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
-#     for x in range(len(P_pred)):
-#         if x not in goodInd:
-#             P_pred[x] = 0
-#     x_ind = 0
-#     x_lab = []
-#     maxY = np.max(np.concatenate((P, P_pred)))
-#     i = 0
-#     if plot:
-#         for p, pp in zip(P, P_pred):
-#             plt.bar([x_ind, x_ind + 1], [p, pp], color=["black", "red"])
-#             x_lab.append([x_ind + .5, "M+" + str(i)])
-#             x_ind += 4
-#             i += 1
-#         plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
-#         plt.scatter([-1], [-1], c="red", label="Predicted")
-#         plt.scatter([-1], [-1], c="black", label="Measured")
-#         plt.legend()
-#         plt.ylim((0, maxY))
-#         plt.xlim((-2, x_ind + 1))
-#
-#     T = integrated_X_full(T, sol.x[2], sol.x[3], sol.x[4])
-#
-#     return g, D, T, err, P_pred
 
 
 def ISAFit_classical(T, N, P, func, goodInd, x_init=np.random.random((2)), plot=False,q=None):
@@ -805,10 +714,10 @@ def dhaISA(e, D, T, N, P):
 
     return P
 
-def correctNaturalAbundance(vec,formula,charge = -1,q=None):
-    data = pd.DataFrame(data=vec.reshape(1, -1), index=[0],
-                        columns=["No label"] + [str(x + 1) + "C13" for x in range(len(vec) - 1)])
-    vec_cor = picor.calc_isotopologue_correction(data, molecule_formula=formula, molecule_charge=charge,resolution_correction=False).values[0]#,resolution=resolution,mz_calibration=res_mz).values[0]
+def correctNaturalAbundance(vecs,formula,charge = -1,q=None):
+    data = pd.DataFrame(data=vecs,
+                        columns=["No label"] + [str(x + 1) + "C13" for x in range(vecs.shape[1] - 1)])
+    vec_cor = picor.calc_isotopologue_correction(data, molecule_formula=formula, molecule_charge=charge,resolution_correction=False).values#,resolution=resolution,mz_calibration=res_mz).values[0]
 
     if type(q) != type(None):
         q.put(0)
@@ -977,32 +886,21 @@ class MSIData():
         nrows = self.data_tensor.shape[1]
         ncols = self.data_tensor.shape[2]
         ntotal = nrows * ncols
-        df = pd.DataFrame(index=range(ntotal),columns=self.targets)
 
-        #construct df
-        for met, i in zip(self.targets, range(len(self.data_tensor))):
-            x = []
-            y = []
-            ii = 0
-            for r in range(nrows):
-                for c in range(ncols):
-                    x.append(c)
-                    y.append(r)
-                    df.at[ii,met] = self.data_tensor[i][r][c]
-                    ii += 1
+        args = [[x] for x in self.data_tensor] + [[self.tic_image], [self.imageBoundary]]
 
+        data = np.array(startConcurrentTask(MSIData.parse_matrix_to_column,args,self.numCores,"forming matrix",len(args))).transpose()
 
-        imageBoundary = []
-        tic = []
+        df = pd.DataFrame(data,index=range(ntotal),columns = list(self.targets) + ["tic","boundary"])
+
+        x = []
+        y = []
+
         for r in range(nrows):
             for c in range(ncols):
-                imageBoundary.append(self.imageBoundary[r,c])
-                tic.append(self.tic_image[r,c])
+                x.append(c)
+                y.append(r)
 
-
-        #set coordinates
-        df["tic"] = tic
-        df["boundary"] = imageBoundary
         df["x"] = x
         df["y"] = y
 
@@ -1022,6 +920,18 @@ class MSIData():
             q.put([])
 
         return arr
+
+    @staticmethod
+    def parse_matrix_to_column(arr,q=None):
+
+        arr = arr.flatten()
+
+        if type(q) != type(None):
+            q.put([])
+
+        return arr
+
+
 
 
 
@@ -1067,7 +977,7 @@ class MSIData():
         #close output file
         output.close()
 
-    def segmentImage(self,method="TIC_auto", threshold=0, num_latent=2, dm_method="PCA",fill_holes = True):
+    def segmentImage(self,method="TIC_auto", threshold=0, num_latent=2, dm_method="PCA",fill_holes = True,n=None):
         """
         Segment image into sample and background
         :param method: str, method for segmentation ("TIC auto" = find optimal separation between background and foreground based on TIC intensity, "K_means"=use K-means clustering, "TIC_manual"= use a user-defined threshold for segment image based on TIC
@@ -1075,8 +985,10 @@ class MSIData():
         :param num_latent: int, number of latent variables to use in dimensionality reduction prior to clustering when using K_means
         :param dm_method: str, dimensionality reduction method to use with K_means ("PCA" or "TSNE")
         :param fill_holes: bool, True or False depending
+        :param n: int, number of pixels to use for fitting kmeans
         :return:
         """
+
 
         # go through all features in dataset
 
@@ -1124,7 +1036,18 @@ class MSIData():
                 plt.xlabel("t-SNE1")
                 plt.ylabel("t-SNE2")
 
-            labels = kmean.fit_predict(format_data)
+            if type(n) == type(None):
+                n = len(format_data)
+
+            if n > len(format_data):
+                n = len(format_data)
+
+            samp = rd.sample(list(range(len(format_data))),k=n)
+
+            kmean.fit(format_data[samp])
+
+            labels = kmean.predict(format_data)
+
             group0Int = np.mean(
                 [self.tic_image[xs[x], ys[x]] for x in range(len(labels)) if labels[x] < .5])
             group1Int = np.mean(
@@ -1241,24 +1164,35 @@ class MSIData():
 
         return fluxImageG,fluxImageD,fluxImageT0,fluxImageT1,fluxImageT2,T_founds,P_trues,P_preds,numFounds,errs,errors
 
-    def correctNaturalAbundance(self,formula,inds=None):
-        if type(inds) == type(None):
-            inds = list(range(len(self.targets)))
+    def correctNaturalAbundance(self,formulas,inds):
+
         if self.polarity == "positive": charge = 1
         else: charge = -1
         args = []
-        coords = []
-        for r in range(self.tic_image.shape[0]):
-            for c in range(self.tic_image.shape[1]):
-                if self.imageBoundary[r,c] > 0.5:
-                    vec = self.data_tensor[inds,r,c]
-                    args.append([vec,formula,charge])
-                    coords.append([r,c])
+        indMap = []
+        allCoords = []
+        for formula,ind in zip(formulas,inds):
+            coords = []
+            vecs = []
+            for r in range(self.tic_image.shape[0]):
+                for c in range(self.tic_image.shape[1]):
+                    if self.imageBoundary[r,c] > 0.5:
+                        vec = self.data_tensor[ind,r,c]
+                        vecs.append(vec)
+                        #args.append([vec,formula,charge])
+                        coords.append([r,c])
 
+            coords = splitList(coords,self.numCores)
+            vecs = splitList(vecs,self.numCores)
+            indMap += [ind for _ in vecs]
+
+            args += [[np.array(vec),formula,charge] for vec in vecs]
+            allCoords += coords
         results = startConcurrentTask(correctNaturalAbundance,args,self.numCores,"correcting natural abundance",len(args))
 
-        for corr,(x,y) in zip(results,coords):
-            self.data_tensor[inds,x,y] = corr
+        for vec,coord,ind in zip(results,allCoords,indMap):
+            for corr,(x,y) in zip(vec,coord):
+                self.data_tensor[ind,x,y] = corr
 
 def getMzsOfIsotopologues(formula,elementOfInterest = "C"):
     # calculate relevant m/z's
