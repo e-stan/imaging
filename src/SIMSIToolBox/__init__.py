@@ -732,6 +732,7 @@ def convertSpectraAndExtractIntensity(mzs,inten,thresh,targets,ppm,dtype,q=None)
     #intensities = np.array([extractIntensity(mz,spec,ppm,dtype) for mz in targets])
 
     intensities = []
+    ppms = []
 
     order = list(range(len(mzs)))
     order.sort(key=lambda x:mzs[x])
@@ -749,28 +750,40 @@ def convertSpectraAndExtractIntensity(mzs,inten,thresh,targets,ppm,dtype,q=None)
             Origpos -= 1
         pos = int(Origpos)
         val = 0
-        while pos >= 0:
-            if mzs[pos] < mz_start:
-                break
-            if inten[pos] > thresh:
-                val += inten[pos]
-            pos -= 1
+        observedMzs = [[0,0]]
+        if mzs[Origpos] > mz_start and mzs[Origpos] < mz_end:
+            while pos >= 0:
+                if mzs[pos] < mz_start:
+                    break
+                if inten[pos] > thresh:
+                    val += inten[pos]
+                    observedMzs.append([mzs[pos],inten[pos]])
+                pos -= 1
+    
+            pos = int(Origpos)
+            while pos < len(mzs):
+                if mzs[pos] > mz_end:
+                    break
+                if inten[pos] > thresh:
+                    val += inten[pos]
+                    observedMzs.append([mzs[pos],inten[pos]])
 
-        pos = int(Origpos)
-        while pos < len(mzs):
-            if mzs[pos] > mz_end:
-                break
-            if inten[pos] > thresh:
-                val += inten[pos]
-            pos += 1
+                pos += 1
 
-
+        if len(observedMzs) > 1:
+            observedMzs = np.array(observedMzs)
+            observedMzs[:,1] = observedMzs[:,1] / val
+            observedMz = np.sum([x[0]*x[1] for x in observedMzs])
+            err = np.abs(observedMz - mz)/mz * 1e6
+        else:
+            err = 0
+        ppms.append(err)
         intensities.append(val)
 
     if type(q) != type(None):
         q.put(0)
 
-    return np.array(intensities)
+    return np.array(intensities),np.array(ppms)
 
 class MSIData():
     def __init__(self,targets,ppm,mass_range = [0,1000],numCores = 1,intensityCutoff = 100):
@@ -821,8 +834,11 @@ class MSIData():
             inds.append([y-1,x-1])
 
         result = startConcurrentTask(convertSpectraAndExtractIntensity,args,self.numCores,"extracting intensities",len(args))
-        for [x,y],intensities in zip(inds,result):
+        self.mass_errors = np.zeros((len(self.targets),self.tic_image.shape[0],self.tic_image.shape[1]))
+
+        for [x,y],[intensities,ppmErrs] in zip(inds,result):
             self.data_tensor[:,x,y] = intensities
+            self.mass_errors[:,x,y] = ppmErrs
 
         self.imageBoundary = np.ones(self.tic_image.shape)
 
@@ -849,6 +865,7 @@ class MSIData():
 
         # make output array and resize if necessary
         self.data_tensor = np.zeros((len(self.targets),len(xcords), len(ycords)))
+        self.mass_errors = np.zeros((len(self.targets),len(xcords), len(ycords)))
 
         xcords.sort()
         ycords.sort()
@@ -953,6 +970,7 @@ class MSIData():
         self.imageBoundary = res[-1]
 
         self.data_tensor = np.array(res[:-2])
+        self.mass_errors = np.zeros(self.data_tensor.shape)
 
 
     def to_imzML(self,outfile):
