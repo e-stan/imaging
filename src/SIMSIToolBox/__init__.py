@@ -1106,7 +1106,9 @@ class MSIData():
         self.data_tensor = tensorFilt
         self.tic_image = tic_smoothed
 
-    def runISA(self,isaModel="flexible",T=[0,0,1],X_image = None):
+    def runISA(self,inds=None,isaModel="flexible",T=[0,0,1],X_image = None):
+        if inds == type(None):
+            inds = list(range(len(self.data_tensor)))
         c13ab = 0.011  # natural abundance
         N = [(1 - c13ab) ** 2, 2 * (1 - c13ab) * c13ab,
              c13ab ** 2]  # get expected labeling of precursor from natural abundance
@@ -1127,8 +1129,8 @@ class MSIData():
         argList = []
         coords = []
 
-        numCarbons = len(self.data_tensor) - 1
-        data = normalizeTensor(self.data_tensor)
+        numCarbons = len(self.data_tensor[inds]) - 1
+        data = normalizeTensor(self.data_tensor[inds])
         func = getISAEq(numCarbons)
 
         numFounds = []
