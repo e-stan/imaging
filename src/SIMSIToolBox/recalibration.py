@@ -14,6 +14,90 @@ from threading import Thread
 import random as rd
 import matplotlib.pyplot as plt
 
+def write_corrected_msi(msi,output_file,tolerance,database_exactmass,step,dalim,numCores):
+    """
+    perform adaptive pixel normalization
+    :param msi:
+    :param output_file:
+    :param tolerance:
+    :param database_exactmass:
+    :param step:
+    :param dalim:
+    :param numCores:
+    :return:
+    """
+    # iterate throug each pixel of an MSI
+    print("reading spectra...",end="")
+    args = []
+    p = ImzMLParser(msi, parse_lib='ElementTree')
+    coords = []
+    for idx, (x, y, z) in enumerate(p.coordinates):
+
+        ms_mzs, ms_intensities = p.getspectrum(idx)
+        args.append([ms_mzs,ms_intensities,tolerance,database_exactmass,step,dalim])
+        coords.append((x,y,z))
+
+    print("done")
+
+    result = startConcurrentTask(correctSpectrum,args,numCores,"correcting spectra",len(args))
+
+    successCount = 0
+    totalCount = 0
+    with ImzMLWriter(output_file) as w:
+        for (corrected_mzs,ms_intensities,success),(x,y,z) in zip(result,coords):
+            w.addSpectrum(corrected_mzs, ms_intensities, (x,y,z))
+            successCount += success
+            totalCount += 1
+
+    print("corrected " + str(100*float(successCount)/totalCount) + "% of pixels")
+    print("writing spectra...",end="")
+    print("done")
+
+def visualizeParameters(msi,n,tolerance,database_exactmass,step,dalim):
+    p = ImzMLParser(msi, parse_lib='ElementTree')
+    numPixels = list(range(len(p.coordinates)))
+    samp = rd.sample(numPixels,k=n)
+    i = 0
+    for x in samp:
+        plt.figure()
+        plt.title(i)
+        ms_mzs, ms_intensities = p.getspectrum(x)
+        peaks_ind = peak_selection(ms_intensities)
+        peaks_mz = ms_mzs[peaks_ind]
+
+        print(len(peaks_mz), "peaks found")
+        hit_exp, hit_errors = hits_generation(peaks_mz, database_exactmass, tolerance)
+
+        x = np.asarray(hit_errors)
+        x_grid = np.arange(-tolerance, tolerance + 0.0001, 0.0001)
+        pdf = kde_scipy(x, x_grid, bandwidth=step)
+        max_da_value = x_grid[np.argmax(pdf, axis=0)]
+        plt.plot(x_grid,pdf)
+
+        plt.plot([max_da_value - dalim,max_da_value - dalim],[0,max(pdf)],color="red")
+        plt.plot([max_da_value + dalim,max_da_value + dalim],[0,max(pdf)],color="red")
+
+        print(len(hit_errors),"hits found")
+        roi = hits_selection(hit_errors, step, tolerance, da_limit=dalim)
+
+        print(len(roi),"peaks in roi found")
+
+        mz_error_model = create_lm(hit_exp, hit_errors, tolerance=tolerance, da_limit=dalim, step=step)
+
+        plt.figure()
+        plt.scatter(hit_exp,hit_errors,color="black",s=3)
+        plt.plot([min(hit_exp),max(hit_exp)],[max_da_value + dalim,max_da_value + dalim],color="red")
+        plt.plot([min(hit_exp),max(hit_exp)],[max_da_value - dalim,max_da_value - dalim],color="red")
+
+        mzsToPlot = np.linspace(min(hit_exp),max(hit_exp),100)
+        X = np.vander(mzsToPlot, 2)
+        predicted_mz_errors = mz_error_model.predict(X)
+
+        plt.plot(mzsToPlot,predicted_mz_errors,color="grey",alpha=0.5)
+        plt.title(i)
+        i += 1
+
+##### HELPER FUNCTIONS #####
 
 def peak_selection(ms_intensities):
     # return the 300 mot intense centroid of a mass spectrum
@@ -121,79 +205,6 @@ def correctSpectrum(ms_mzs,ms_intensities,tolerance,database_exactmass,step,dali
     if type(q) != type(None):
         q.put([])
     return corrected_mzs, ms_intensities,success
-
-
-def write_corrected_msi(msi,output_file,tolerance,database_exactmass,step,dalim,numCores):
-    # iterate throug each pixel of an MSI
-    print("reading spectra...",end="")
-    args = []
-    p = ImzMLParser(msi, parse_lib='ElementTree')
-    coords = []
-    for idx, (x, y, z) in enumerate(p.coordinates):
-
-        ms_mzs, ms_intensities = p.getspectrum(idx)
-        args.append([ms_mzs,ms_intensities,tolerance,database_exactmass,step,dalim])
-        coords.append((x,y,z))
-
-    print("done")
-
-    result = startConcurrentTask(correctSpectrum,args,numCores,"correcting spectra",len(args))
-
-    successCount = 0
-    totalCount = 0
-    with ImzMLWriter(output_file) as w:
-        for (corrected_mzs,ms_intensities,success),(x,y,z) in zip(result,coords):
-            w.addSpectrum(corrected_mzs, ms_intensities, (x,y,z))
-            successCount += success
-            totalCount += 1
-
-    print("corrected " + str(100*float(successCount)/totalCount) + "% of pixels")
-    print("writing spectra...",end="")
-    print("done")
-
-def visualizeParameters(msi,n,tolerance,database_exactmass,step,dalim):
-    p = ImzMLParser(msi, parse_lib='ElementTree')
-    numPixels = list(range(len(p.coordinates)))
-    samp = rd.sample(numPixels,k=n)
-    i = 0
-    for x in samp:
-        plt.figure()
-        plt.title(i)
-        ms_mzs, ms_intensities = p.getspectrum(x)
-        peaks_ind = peak_selection(ms_intensities)
-        peaks_mz = ms_mzs[peaks_ind]
-
-        print(len(peaks_mz), "peaks found")
-        hit_exp, hit_errors = hits_generation(peaks_mz, database_exactmass, tolerance)
-
-        x = np.asarray(hit_errors)
-        x_grid = np.arange(-tolerance, tolerance + 0.0001, 0.0001)
-        pdf = kde_scipy(x, x_grid, bandwidth=step)
-        max_da_value = x_grid[np.argmax(pdf, axis=0)]
-        plt.plot(x_grid,pdf)
-
-        plt.plot([max_da_value - dalim,max_da_value - dalim],[0,max(pdf)],color="red")
-        plt.plot([max_da_value + dalim,max_da_value + dalim],[0,max(pdf)],color="red")
-
-        print(len(hit_errors),"hits found")
-        roi = hits_selection(hit_errors, step, tolerance, da_limit=dalim)
-
-        print(len(roi),"peaks in roi found")
-
-        mz_error_model = create_lm(hit_exp, hit_errors, tolerance=tolerance, da_limit=dalim, step=step)
-
-        plt.figure()
-        plt.scatter(hit_exp,hit_errors,color="black",s=3)
-        plt.plot([min(hit_exp),max(hit_exp)],[max_da_value + dalim,max_da_value + dalim],color="red")
-        plt.plot([min(hit_exp),max(hit_exp)],[max_da_value - dalim,max_da_value - dalim],color="red")
-
-        mzsToPlot = np.linspace(min(hit_exp),max(hit_exp),100)
-        X = np.vander(mzsToPlot, 2)
-        predicted_mz_errors = mz_error_model.predict(X)
-
-        plt.plot(mzsToPlot,predicted_mz_errors,color="grey",alpha=0.5)
-        plt.title(i)
-        i += 1
 
 
 def startConcurrentTask(task,args,numCores,message,total,chunksize="none",verbose=True):
