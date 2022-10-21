@@ -17,14 +17,14 @@ import matplotlib.pyplot as plt
 def write_corrected_msi(msi,output_file,tolerance,database_exactmass,step,dalim,numCores):
     """
     perform adaptive pixel normalization
-    :param msi:
-    :param output_file:
-    :param tolerance:
-    :param database_exactmass:
-    :param step:
-    :param dalim:
-    :param numCores:
-    :return:
+    :param msi: str, path to input imzml data file
+    :param output_file: str, path for recalibrated imzml
+    :param tolerance: float, maximum expected mass shift
+    :param database_exactmass: list, sorted list of m/z values for calibrating compounds
+    :param step: float, parameter for controlling smoothing of histogram. Higher = more smoothing, lower = less smoothing
+    :param dalim: float, maximum expected spread of mass shifts in m/z
+    :param numCores: int, number of processor cores to use
+    :return: None
     """
     # iterate throug each pixel of an MSI
     print("reading spectra...",end="")
@@ -54,6 +54,16 @@ def write_corrected_msi(msi,output_file,tolerance,database_exactmass,step,dalim,
     print("done")
 
 def visualizeParameters(msi,n,tolerance,database_exactmass,step,dalim):
+    """
+    visualize correction results for given parameters
+    :param msi: str, path to input imzml data file
+    :param n: number of pixels to show correction plots for
+    :param tolerance: float, maximum expected mass shift
+    :param database_exactmass: list, sorted list of m/z values for calibrating compounds
+    :param step: float, parameter for controlling smoothing of histogram. Higher = more smoothing, lower = less smoothing
+    :param dalim: float, maximum expected spread of mass shifts in m/z
+    :return: None
+    """
     p = ImzMLParser(msi, parse_lib='ElementTree')
     numPixels = list(range(len(p.coordinates)))
     samp = rd.sample(numPixels,k=n)
