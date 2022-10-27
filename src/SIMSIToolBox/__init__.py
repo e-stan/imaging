@@ -20,6 +20,7 @@ from threading import Thread
 from bisect import bisect_left
 from bisect import insort_left
 import random as rd
+from copy import deepcopy
 
 class MSIData():
     def __init__(self,targets,ppm,mass_range = [0,1000],numCores = 1,intensityCutoff = 100):
@@ -254,7 +255,7 @@ class MSIData():
     def smoothData(self,method,kernal_size):
         """
         Smooth data
-        :param method: str, smoothing method "MA" or "GB"
+        :param method: str, smoothing method "MA", "GB", "iMA", or "iGB". "iMA" and "iGB" only apply the smoothing filter to missing values (0s)
         :param kernal_size: int, size of smoothing box (e.g.,3=3x3, 5=5x5)
         :return: None
         """
@@ -273,7 +274,7 @@ class MSIData():
         self.data_tensor = tensorFilt
         self.tic_image = tic_smoothed
 
-    def runISA(self,inds=None,isaModel="flexible",T=[0,0,1],X_image = None,minIso=2,minFrac=0.0):
+    def runISA(self,inds=None,isaModel="flexible",T=[0,0,1],X_image = None,minIso=2,minFrac=0.0,NACorrected=False):
         """
         Run isotopomer spectral analysis on data
         :param inds: indices of data_tensor that contain the isotopes of the fatty acid of interest in order
@@ -282,13 +283,17 @@ class MSIData():
         :param X_image: list, list of numpy matrices that give the precursor labeling of each isotope (M0, M1, M2), required for dual
         :param minIso: int, minimum number of detected isotopes at each pixel required for ISA of that pixel
         :param minFrac: float, minimum relative intensity of isotope to conisder as detected
+        :param NACorrected: bool, True is data has been natural abundance corrected, False otherwise
         :return: g(t) image,D image,X0 image,X1 image,X2 image,list of precursor labels,list of observed product labels,
         list of fit product labels,list that gives the number of isotopes detected in each pixel,error in product fit,
         labeling of product where ISA failed
         """
         if inds == type(None):
             inds = list(range(len(self.data_tensor)))
-        c13ab = 0.011  # natural abundance
+        if NACorrected:
+            c13ab = 0.0
+        else:
+            c13ab = 0.011  # natural abundance
         N = [(1 - c13ab) ** 2, 2 * (1 - c13ab) * c13ab,
              c13ab ** 2]  # get expected labeling of precursor from natural abundance
 
@@ -552,18 +557,29 @@ def imputeRowMin(arr, alt_min=2):
     return data_imp
 
 
+
 def convolveLayer(offset, height, width, layer, imageBoundary, method="MA", q=None):
     # iterate through pixels
-    if method == "MA":
+    if "MA" in method:
         tensorFilt = np.zeros((height - 2 * offset, width - 2 * offset))
         for r in range(offset, height - offset):
             for c in range(offset, width - offset):
-                tempMat = layer[r - offset:r + offset + 1, c - offset:c + offset + 1]
-                coef = imageBoundary[r - offset:r + offset + 1, c - offset:c + offset + 1]
-                coef = coef / max([1, np.sum(coef)])
-                tensorFilt[r - offset, c - offset] = np.sum(np.multiply(tempMat, coef))
-    elif method == "GB":
-        tensorFilt = ndimage.gaussian_filter(layer, offset)
+                if method[0] != "i" or layer[r,c] < 1e-6:
+                    tempMat = layer[r - offset:r + offset + 1, c - offset:c + offset + 1]
+                    coef = imageBoundary[r - offset:r + offset + 1, c - offset:c + offset + 1]
+                    coef = coef / max([1, np.sum(coef)])
+                    tensorFilt[r - offset, c - offset] = np.sum(np.multiply(tempMat, coef))
+                else:
+                    tensorFilt[r - offset, c - offset] = layer[r,c]
+    elif "GB" in method:
+
+        tensorFilt = deepcopy(layer)
+
+        if "i" == method[0]:
+            zeros = layer < 1e-6
+            tensorFilt[zeros] = ndimage.gaussian_filter(layer, offset)[zeros]
+        else:
+            tensorFilt = ndimage.gaussian_filter(layer, offset)
 
     if type(q) != type(None):
         q.put(0)
