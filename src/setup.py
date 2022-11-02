@@ -21,7 +21,8 @@ setup(
         "molmass",
         "Pillow",
         "pyimzml",
-        "picor"
+        "picor",
+        "sympy"
     ],
     classifiers=[
         'Development Status :: 3 - Alpha',

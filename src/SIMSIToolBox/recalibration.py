@@ -1,8 +1,5 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 # code adpated from https://github.com/LaRoccaRaphael/MSI_recalibration
 
-import argparse
 import numpy as np
 from pyimzml.ImzMLParser import ImzMLParser
 from pyimzml.ImzMLWriter import ImzMLWriter

@@ -21,6 +21,7 @@ from bisect import bisect_left
 from bisect import insort_left
 import random as rd
 from copy import deepcopy
+import sympy as sym
 
 class MSIData():
     def __init__(self,targets,ppm,mass_range = [0,1000],numCores = 1,intensityCutoff = 100):
@@ -301,6 +302,7 @@ class MSIData():
         errs = []
         T_founds = []
         fluxImageG = np.zeros(self.tic_image.shape)
+        fluxImageE = np.zeros(self.tic_image.shape)
         fluxImageD = np.zeros(self.tic_image.shape)
         fluxImageT0 = np.zeros(self.tic_image.shape)
         fluxImageT1 = np.zeros(self.tic_image.shape)
@@ -315,9 +317,19 @@ class MSIData():
 
         numCarbons = len(self.data_tensor[inds]) - 1
         data = normalizeTensor(self.data_tensor[inds])
-        func = getISAEq(numCarbons)
+        exprList = generateISAExpressions(getISAEq(numCarbons),numCarbons)
 
         numFounds = []
+
+        if isaModel == "flexible":
+            initParameters = [0.5]
+        elif isaModel == "classical":
+            initParameters = [0.5,0.5]
+        elif isaModel == "elongation":
+            initParameters = [0.33,0.33,0.33]
+        else:
+            print("ISA model not recognized")
+            return -1
 
         for r in range(self.tic_image.shape[0]):
             for c in range(self.tic_image.shape[1]):
@@ -330,35 +342,31 @@ class MSIData():
                 if self.imageBoundary[r, c] > .5 and len(goodInd) > minIso:
                     # fit ISA
                     numFounds.append(len(goodInd))
-                    a = [T, N, P, func, goodInd, .5,False]
+                    a = [T, N, P, exprList, goodInd, np.array(initParameters)]
                     coords.append((r, c))
                     P_consider.append(P)
-                    if isaModel == "dual":
-                        a[0] = X_image[:,r,c]
                     argList.append(a)  # np.random.random(1)))
 
         if isaModel == "flexible":
             eq = ISAFit
         elif isaModel == "classical":
             eq = ISAFit_classical
-        elif isaModel == "dual":
-            eq = ISAFit_knownT
-        else:
-            print("ISA model not recognized")
-            return -1
+        elif isaModel == "elongation":
+            eq = ISAFit_e_g
 
         results = startConcurrentTask(eq,argList,self.numCores,"Running ISA",len(argList))
 
         errors = []
-        for (g, D, T_found, err, P_pred), (r, c), P_true in zip(results, coords, P_consider):
+        for (g, e,D, T_found, err, P_pred), (r, c), P_true in zip(results, coords, P_consider):
             # save results in data structures
-            if g > -.0001 and g < 1.1 and all(xx > -0.01 and xx < 1.1 for xx in T_found):
+            if g > -.0001 and g < 1.1 and all(xx > -0.01 and xx < 1.1 for xx in T_found) and e > -.0001 and e < 1.1 :
                 errs.append(err)
                 T_founds.append(T_found)
                 P_preds.append(P_pred)
                 P_trues.append(P_true)
 
                 fluxImageG[r, c] = g
+                fluxImageE[r, c] = e
                 fluxImageD[r, c] = D
                 fluxImageT0[r, c] = T_found[0]
                 fluxImageT1[r, c] = T_found[1]
@@ -366,7 +374,7 @@ class MSIData():
             else:
                 errors.append(P_true)
 
-        return fluxImageG,fluxImageD,fluxImageT0,fluxImageT1,fluxImageT2,T_founds,P_trues,P_preds,numFounds,errs,errors
+        return fluxImageG,fluxImageE,fluxImageD,fluxImageT0,fluxImageT1,fluxImageT2,T_founds,P_trues,P_preds,numFounds,errs,errors
 
     def correctNaturalAbundance(self,formulas,inds):
         """
@@ -698,9 +706,60 @@ def normalizeTensor(tensorFilt):
 
 ####################### ISA functions and equations #######################
 
+
+def generateISAExpressions(expr,nc):
+    symbols,expr = expr
+    expr = sym.expand(expr)
+    term_grouping = [0 for _ in range(nc+1)]
+    symMapper = {"x1": 1, "x2": 2, "n1": 1, "n2": 2}
+
+    for term in sym.Add.make_args(expr):
+        isoCount = 0
+
+        for val in sym.Mul.make_args(term):
+            tmp = str(val)
+            tmp = tmp.split("**")
+            if tmp[0] in symMapper:
+                n = symMapper[tmp[0]]
+            else:
+                n = 0
+            if len(tmp) == 2:
+                exp = int(tmp[1])
+            else:
+                exp = 1
+
+            isoCount += int(n * exp)
+
+        term_grouping[isoCount] += term
+
+    #print(term_grouping)
+
+    return symbols,term_grouping
+
 def getISAEq(numCarbons):
-    d = {16: palmitateISA, 18: stearicISA, 20: arachidonicISA}
-    return d[numCarbons]
+
+    x0 = sym.Symbol('x0')
+    x1 = sym.Symbol('x1')
+    x2 = sym.Symbol('x2')
+    n0 = sym.Symbol('n0')
+    n1 = sym.Symbol('n1')
+    n2 = sym.Symbol('n2')
+    g = sym.Symbol('g')
+    o = sym.Symbol("o")
+    e = sym.Symbol('e')
+
+    symbols = [x0,x1,x2,n0,n1,n2,g,o,e]
+
+    if numCarbons == 16:
+        expr = g * (x0 + x1 + x2) ** 8 + o * (n0 + n1 + n2) ** 8
+
+    if numCarbons == 18:
+        expr = g * (x0 + x1 + x2) ** 9 + e * (x0 + x1 + x2) * (n0 + n1 + n2) ** 8 + o * (n0 + n1 + n2) ** 9
+
+    if numCarbons == 20:
+        expr = e * (x0 + x1 + x2) * (n0 + n1 + n2) ** 9 + o * (n0 + n1 + n2) ** 10
+
+    return symbols,expr
 
 
 def objectiveFunc(t, p, goodInd, params=[], alpha=0, lam=0):
@@ -713,393 +772,109 @@ def objectiveFunc(t, p, goodInd, params=[], alpha=0, lam=0):
     return np.sum(np.square(np.subtract(trel, prel))) + alpha * lam * np.sum(np.abs(params)) + (
             1 - alpha) / 2 * lam * np.sum(np.square(params))
 
-
-def generalizedExp(t, c, k):
-    return c * (1 - np.exp(-1 * k * t))
-
-
-def ISAFit(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False, q=None):
+def ISAFit(T, N, P, exprList, goodInd, x_init, q=None):
     success = False
     initial_params = np.concatenate((x_init, T), axis=None)
+
+    func = sym.lambdify(*exprList)
+
     while not success:
         sol = opt.minimize(
-            lambda x: objectiveFunc(P, func(x[0], 1.0, [xx / np.sum(x[1:]) for xx in x[1:]], N, P), goodInd),
-            x0=initial_params)  # ,method="trust-constr",
-        # bounds=[(0, x) for x in [1,np.inf,np.inf,np.inf]])
+            lambda x: objectiveFunc(P, func(x[1]/np.sum(x[1:4]),x[2]/np.sum(x[1:4]),x[3]/np.sum(x[1:4]),N[0],N[1],N[2],x[0],1-x[0],0), goodInd),
+            #lambda x: objectiveFunc(P, func(x[0], 1.0, [xx / np.sum(x[1:]) for xx in x[1:]], N, P), goodInd),
+            x0=initial_params)#,  # ,method="trust-constr",
+        #bounds=[(0, x) for x in [1,np.inf,np.inf,np.inf]])
         if not sol.success:
             initial_params = np.random.random(initial_params.shape)
         else:
             success = True
     # g, D = sol.x[:2]
     g = sol.x[0]
-    D = 1
-    T = sol.x[1:]
+    o = 1-g
+    e = 0
+    T = sol.x[1:4]
     T = T / np.sum(T)
+    D = 1.0
     err = sol.fun
-    P_pred = func(g, D, T, N, P)
+    P_pred = func(T[0],T[1],T[2],N[0],N[1],N[2],g,o,e)
     P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
     for x in range(len(P_pred)):
         if x not in goodInd:
             P_pred[x] = 0
-    x_ind = 0
-    x_lab = []
-    maxY = np.max(np.concatenate((P, P_pred)))
-    i = 0
-    if plot:
-        for p, pp in zip(P, P_pred):
-            plt.bar([x_ind, x_ind + 1], [p, pp], color=["black", "red"])
-            x_lab.append([x_ind + .5, "M+" + str(i)])
-            x_ind += 4
-            i += 1
-        plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
-        plt.scatter([-1], [-1], c="red", label="Predicted")
-        plt.scatter([-1], [-1], c="black", label="Measured")
-        plt.legend()
-        plt.ylim((0, maxY))
-        plt.xlim((-2, x_ind + 1))
-        plt.figure()
-
-        # plot solution curves
-        D_test = np.linspace(0, 1, 25)
-        for pp in range(len(P)):
-            g_test = []
-            for d in D_test:
-                sol = opt.minimize(lambda x: abs(P[pp] - func(x[0], d, T, N, P)[pp]), x0=[g])
-                g_test.append(sol.x[0])
-            plt.plot(D_test, g_test, c="black")
-
-        plt.scatter([D], [g], color="red")
-        plt.ylim((0, 1))
-        plt.xlabel("D")
-        plt.ylabel("g(t)")
 
     if type(q) != type(None):
         q.put(0)
 
-    return g, D, T, err, P_pred
+    return g, e,D, T,err, P_pred
 
-
-def ISAFit_classical(T, N, P, func, goodInd, x_init=np.random.random((2)), plot=False, q=None):
+def ISAFit_e_g(T, N, P, exprList, goodInd, x_init, q=None):
     success = False
-    initial_params = x_init
+    initial_params = np.concatenate((x_init, T), axis=None)
+
+    func = sym.lambdify(*exprList)
+
     while not success:
         sol = opt.minimize(
-            lambda x: objectiveFunc(P, func(x[0], x[1], T, N, P), goodInd),
+            lambda x: objectiveFunc(P, func(x[3]/np.sum(x[3:6]),x[4]/np.sum(x[3:6]),x[5]/np.sum(x[3:6]),N[0],N[1],N[2],x[0]/np.sum(x[:3]),x[1]/np.sum(x[:3]),x[2]/np.sum(x[:3])), goodInd) + 0.001 * (x[0] + x[2])/np.sum(x[:3]),
+            #lambda x: objectiveFunc(P, func(x[0], 1.0, [xx / np.sum(x[1:]) for xx in x[1:]], N, P), goodInd),
+            x0=initial_params,  # ,method="trust-constr",
+        bounds=[(0, x) for x in [np.inf,np.inf,np.inf,np.inf,np.inf,np.inf]])
+        if not sol.success:
+            initial_params = np.random.random(initial_params.shape)
+        else:
+            success = True
+    # g, D = sol.x[:2]
+    g = sol.x[0] / np.sum(sol.x[:3])
+    o = sol.x[1] / np.sum(sol.x[:3])
+    e = sol.x[2] / np.sum(sol.x[:3])
+    T = sol.x[3:6]
+    T = T / np.sum(T)
+    D = 1.0
+    err = sol.fun
+    P_pred = func(T[0],T[1],T[2],N[0],N[1],N[2],g,o,e)
+    P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
+    for x in range(len(P_pred)):
+        if x not in goodInd:
+            P_pred[x] = 0
+
+    if type(q) != type(None):
+        q.put(0)
+
+    return g, e,D, T,err, P_pred
+
+
+def ISAFit_classical(T, N, P, exprList, goodInd, x_init, q=None):
+    success = False
+    initial_params = x_init
+
+    func = sym.lambdify(*exprList)
+
+    while not success:
+        sol = opt.minimize(
+            lambda x: objectiveFunc(P, func(T[0],T[1],T[2],N[0],N[1],N[2], x[0],1-x[0],0), goodInd),
             x0=initial_params,
         )  # bounds=[(0, 1) for _ in range(len(x_init) + len(T))])
         if not sol.success:
             initial_params = np.random.random(initial_params.shape)
         else:
             success = True
-    # g, D = sol.x[:2]
+
     g = sol.x[0]
     D = sol.x[1]
+    e = 0
+    X = np.array(T)*D + (1-D) * np.array(N)
 
     err = sol.fun
-    P_pred = func(g, D, T, N, P)
+    P_pred = func(X[0],X[1],X[2],N[0],N[1],N[2], g,1-g,0)
+
     P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
     for x in range(len(P_pred)):
         if x not in goodInd:
             P_pred[x] = 0
-    x_ind = 0
-    x_lab = []
-    maxY = np.max(np.concatenate((P, P_pred)))
-    i = 0
-    if plot:
-        for p, pp in zip(P, P_pred):
-            plt.bar([x_ind, x_ind + 1], [p, pp], color=["black", "red"])
-            x_lab.append([x_ind + .5, "M+" + str(i)])
-            x_ind += 4
-            i += 1
-        plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
-        plt.scatter([-1], [-1], c="red", label="Predicted")
-        plt.scatter([-1], [-1], c="black", label="Measured")
-        plt.legend()
-        plt.ylim((0, maxY))
-        plt.xlim((-2, x_ind + 1))
-        plt.figure()
-
-        # plot solution curves
-        D_test = np.linspace(0, 1, 25)
-        for pp in range(len(P)):
-            g_test = []
-            for d in D_test:
-                sol = opt.minimize(lambda x: abs(P[pp] - func(x[0], d, T, N, P)[pp]), x0=[g])
-                g_test.append(sol.x[0])
-            plt.plot(D_test, g_test, c="black")
-
-        plt.scatter([D], [g], color="red")
-        plt.ylim((0, 1))
-        plt.xlabel("D")
-        plt.ylabel("g(t)")
 
     if type(q) != type(None):
         q.put(0)
 
-    return g, D, T, err, P_pred
+    return g, e, D, X, err, P_pred
 
-
-def ISAFit_knownT(T, N, P, func, goodInd, x_init=np.random.random((1)), plot=False, q=None):
-    sol = opt.minimize(
-        lambda x: objectiveFunc(P, func(x[0], 1.0, T, N, P), goodInd),
-        x0=x_init)
-    g = sol.x[:1]
-    D = 1.0
-    err = sol.fun
-    P_pred = func(g, D, T, N, P)
-    P_pred = P_pred / np.sum(np.array(P_pred)[goodInd])
-    for x in range(len(P_pred)):
-        if x not in goodInd:
-            P_pred[x] = 0
-    x_ind = 0
-    x_lab = []
-    i = 0
-
-    if plot:
-        maxY = np.max(np.concatenate((P, P_pred)))
-
-        for p, pp in zip(P, P_pred):
-            plt.bar([x_ind, x_ind + 1], [p, pp], color=["black", "red"])
-            x_lab.append([x_ind + .5, "M+" + str(i)])
-            x_ind += 4
-            i += 1
-        plt.xticks([x[0] for x in x_lab], [x[1] for x in x_lab], rotation=90)
-        plt.scatter([-1], [-1], c="red", label="Predicted")
-        plt.scatter([-1], [-1], c="black", label="Measured")
-        plt.legend()
-        plt.ylim((0, maxY))
-        plt.xlim((-2, x_ind + 1))
-
-        plt.figure()
-
-        # plot solution curves
-        D_test = np.linspace(0, 1, 25)
-        for pp in range(len(P)):
-            g_test = []
-            for d in D_test:
-                sol = opt.minimize(lambda x: abs(P[pp] - func(x[0], d, T, N, P)[pp]), x0=[g])
-                g_test.append(sol.x[0])
-            plt.plot(D_test, g_test, c="black")
-
-        plt.scatter([D], [g], color="red")
-        plt.ylim((0, 1))
-        plt.xlabel("D")
-        plt.ylabel("g(t)")
-
-    if type(q) != type(None):
-        q.put(0)
-
-    return g, D, T, err, P_pred
-
-
-def stearicISA(g, D, T, N, P):
-    # define tracer and naturual abundance isotopomers
-    N0 = N[0]
-    N1 = N[1]
-    N2 = N[2]
-    T0 = T[0]
-    T1 = T[1]
-    T2 = T[2]
-
-    # compute X values
-    X0 = D * T0 + (1 - D) * N0
-    X1 = D * T1 + (1 - D) * N1
-    X2 = D * T2 + (1 - D) * N2
-
-    # compute product isotopmer abundances
-
-    P = [g * (X0 ** 9) + (1 - g) * (N0 ** 9),
-         g * (9 * X0 ** 8 * X1) + (1 - g) * (9 * N0 ** 8 * N1),
-         g * (9 * X0 ** 8 * X2 + 36 * X0 ** 7 * X1 ** 2) + (1 - g) * (9 * N0 ** 8 * N2 + 36 * N0 ** 7 * N1 ** 2),
-         g * (72 * X0 ** 7 * X1 * X2 + 84 * X0 ** 6 * X1 ** 3) + (1 - g) * (
-                 72 * N0 ** 7 * N1 * N2 + 84 * N0 ** 6 * N1 ** 3),
-         g * (36 * X0 ** 7 * X2 ** 2 + 252 * X0 ** 6 * X1 ** 2 * X2 + 126 * X0 ** 5 * X1 ** 4) + (1 - g) * (
-                 36 * N0 ** 7 * N2 ** 2 + 252 * N0 ** 6 * N1 ** 2 * N2 + 126 * N0 ** 5 * N1 ** 4),
-         g * (252 * X0 ** 6 * X1 * X2 ** 2 + 504 * X0 ** 5 * X1 ** 3 * X2 + 126 * X0 ** 4 * X1 ** 5) + (1 - g) * (
-                 252 * N0 ** 6 * N1 * N2 ** 2 + 504 * N0 ** 5 * N1 ** 3 * N2 + 126 * N0 ** 4 * N1 ** 5),
-         g * (
-                 84 * X0 ** 6 * X2 ** 3 + 756 * X0 ** 5 * X1 ** 2 * X2 ** 2 + 630 * X0 ** 4 * X1 ** 4 * X2 + 84 * X0 ** 3 * X1 ** 6) + (
-                 1 - g) * (
-                 84 * N0 ** 6 * N2 ** 3 + 756 * N0 ** 5 * N1 ** 2 * N2 ** 2 + 630 * N0 ** 4 * N1 ** 4 * N2 + 84 * N0 ** 3 * N1 ** 6),
-         g * (
-                 504 * X0 ** 5 * X1 * X2 ** 3 + 1260 * X0 ** 4 * X1 ** 3 * X2 ** 2 + 504 * X0 ** 3 * X1 ** 5 * X2 + 36 * X0 ** 2 * X1 ** 7) + (
-                 1 - g) * (
-                 504 * N0 ** 5 * N1 * N2 ** 3 + 1260 * N0 ** 4 * N1 ** 3 * N2 ** 2 + 504 * N0 ** 3 * N1 ** 5 * N2 + 36 * N0 ** 2 * N1 ** 7),
-         g * (
-                 126 * X0 ** 5 * X2 ** 4 + 1260 * X0 ** 4 * X1 ** 2 * X2 ** 3 + 1260 * X0 ** 3 * X1 ** 4 * X2 ** 2 + 252 * X0 ** 2 * X1 ** 6 * X2 + 9 * X0 * X1 ** 8) + (
-                 1 - g) * (
-                 126 * N0 ** 5 * N2 ** 4 + 1260 * N0 ** 4 * N1 ** 2 * N2 ** 3 + 1260 * N0 ** 3 * N1 ** 4 * N2 ** 2 + 252 * N0 ** 2 * N1 ** 6 * N2 + 9 * N0 * N1 ** 8),
-         g * (
-                 630 * X0 ** 4 * X1 * X2 ** 4 + 1680 * X0 ** 3 * X1 ** 3 * X2 ** 3 + 756 * X0 ** 2 * X1 ** 5 * X2 ** 2 + 72 * X0 * X1 ** 7 * X2 + X1 ** 9) + (
-                 1 - g) * (
-                 630 * N0 ** 4 * N1 * N2 ** 4 + 1680 * N0 ** 3 * N1 ** 3 * N2 ** 3 + 756 * N0 ** 2 * N1 ** 5 * N2 ** 2 + 72 * N0 * N1 ** 7 * N2 + N1 ** 9),
-         g * (
-                 126 * X0 ** 4 * X2 ** 5 + 1260 * X0 ** 3 * X1 ** 2 * X2 ** 4 + 1260 * X0 ** 2 * X1 ** 4 * X2 ** 3 + 252 * X0 * X1 ** 6 * X2 ** 2 + 9 * X1 ** 8 * X2) + (
-                 1 - g) * (
-                 126 * N0 ** 4 * N2 ** 5 + 1260 * N0 ** 3 * N1 ** 2 * N2 ** 4 + 1260 * N0 ** 2 * N1 ** 4 * N2 ** 3 + 252 * N0 * N1 ** 6 * N2 ** 2 + 9 * N1 ** 8 * N2),
-         g * (
-                 504 * X0 ** 3 * X1 * X2 ** 5 + 1260 * X0 ** 2 * X1 ** 3 * X2 ** 4 + 504 * X0 * X1 ** 5 * X2 ** 3 + 36 * X1 ** 7 * X2 ** 2) + (
-                 1 - g) * (
-                 504 * N0 ** 3 * N1 * N2 ** 5 + 1260 * N0 ** 2 * N1 ** 3 * N2 ** 4 + 504 * N0 * N1 ** 5 * N2 ** 3 + 36 * N1 ** 7 * N2 ** 2),
-         g * (
-                 84 * X0 ** 3 * X2 ** 6 + 756 * X0 ** 2 * X1 ** 2 * X2 ** 5 + 630 * X0 * X1 ** 4 * X2 ** 4 + 84 * X1 ** 6 * X2 ** 3) + (
-                 1 - g) * (
-                 84 * N0 ** 3 * N2 ** 6 + 756 * N0 ** 2 * N1 ** 2 * N2 ** 5 + 630 * N0 * N1 ** 4 * N2 ** 4 + 84 * N1 ** 6 * N2 ** 3),
-         g * (252 * X0 ** 2 * X1 * X2 ** 6 + 504 * X0 * X1 ** 3 * X2 ** 5 + 126 * X1 ** 5 * X2 ** 4) + (1 - g) * (
-                 252 * N0 ** 2 * N1 * N2 ** 6 + 504 * N0 * N1 ** 3 * N2 ** 5 + 126 * N1 ** 5 * N2 ** 4),
-         g * (36 * X0 ** 2 * X2 ** 7 + 252 * X0 * X1 ** 2 * X2 ** 6 + 126 * X1 ** 4 * X2 ** 5) + (1 - g) * (
-                 36 * N0 ** 2 * N2 ** 7 + 252 * N0 * N1 ** 2 * N2 ** 6 + 126 * N1 ** 4 * N2 ** 5),
-         g * (72 * X0 * X1 * X2 ** 7 + 84 * X1 ** 3 * X2 ** 6) + (1 - g) * (
-                 72 * N0 * N1 * N2 ** 7 + 84 * N1 ** 3 * N2 ** 6),
-         g * (9 * X0 * X2 ** 8 + 36 * X1 ** 2 * X2 ** 7) + (1 - g) * (9 * N0 * N2 ** 8 + 36 * N1 ** 2 * N2 ** 7),
-         g * (9 * X1 * X2 ** 8) + (1 - g) * (9 * N1 * N2 ** 8),
-         g * (X2 ** 9) + (1 - g) * (N2 ** 9)]
-
-    return P
-
-
-def palmitateISA(g, D, T, N, P):
-    # define tracer and naturual abundance isotopomers
-    N0 = N[0]
-    N1 = N[1]
-    N2 = N[2]
-    T0 = T[0]
-    T1 = T[1]
-    T2 = T[2]
-
-    # compute X values
-    X0 = D * T0 + (1 - D) * N0
-    X1 = D * T1 + (1 - D) * N1
-    X2 = D * T2 + (1 - D) * N2
-
-    # compute product isotopmer abundances
-
-    P = [g * (X0 ** 8) + (1 - g) * (N0 ** 8),
-         g * (8 * X0 ** 7 * X1) + (1 - g) * (8 * N0 ** 7 * N1),
-         g * (8 * X0 ** 7 * X2 + 28 * X0 ** 6 * X1 ** 2) + (1 - g) * (8 * N0 ** 7 * N2 + 28 * N0 ** 6 * N1 ** 2),
-         g * (56 * X0 ** 6 * X1 * X2 + 56 * X0 ** 5 * X1 ** 3) + (1 - g) * (
-                 56 * N0 ** 6 * N1 * N2 + 56 * N0 ** 5 * N1 ** 3),
-         g * (28 * X0 ** 6 * X2 ** 2 + 168 * X0 ** 5 * X1 ** 2 * X2 + 70 * X0 ** 4 * X1 ** 4) + (1 - g) * (
-                 28 * N0 ** 6 * N2 ** 2 + 168 * N0 ** 5 * N1 ** 2 * N2 + 70 * N0 ** 4 * N1 ** 4),
-         g * (168 * X0 ** 5 * X1 * X2 ** 2 + 280 * X0 ** 4 * X1 ** 3 * X2 + 56 * X0 ** 3 * X1 ** 5) + (1 - g) * (
-                 168 * N0 ** 5 * N1 * N2 ** 2 + 280 * N0 ** 4 * N1 ** 3 * N2 + 56 * N0 ** 3 * N1 ** 5),
-         g * (
-                 56 * X0 ** 5 * X2 ** 3 + 420 * X0 ** 4 * X1 ** 2 * X2 ** 2 + 280 * X0 ** 3 * X1 ** 4 * X2 + 28 * X0 ** 2 * X1 ** 6) + (
-                 1 - g) * (
-                 56 * N0 ** 5 * N2 ** 3 + 420 * N0 ** 4 * N1 ** 2 * N2 ** 2 + 280 * N0 ** 3 * N1 ** 4 * N2 + 28 * N0 ** 2 * N1 ** 6),
-         g * (
-                 280 * X0 ** 4 * X1 * X2 ** 3 + 560 * X0 ** 3 * X1 ** 3 * X2 ** 2 + 168 * X0 ** 2 * X1 ** 5 * X2 + 8 * X0 * X1 ** 7) + (
-                 1 - g) * (
-                 280 * N0 ** 4 * N1 * N2 ** 3 + 560 * N0 ** 3 * N1 ** 3 * N2 ** 2 + 168 * N0 ** 2 * N1 ** 5 * N2 + 8 * N0 * N1 ** 7),
-         g * (
-                 70 * X0 ** 4 * X2 ** 4 + 560 * X0 ** 3 * X1 ** 2 * X2 ** 3 + 420 * X0 ** 2 * X1 ** 4 * X2 ** 2 + 56 * X0 * X1 ** 6 * X2 + X1 ** 8) + (
-                 1 - g) * (
-                 70 * N0 ** 4 * N2 ** 4 + 560 * N0 ** 3 * N1 ** 2 * N2 ** 3 + 420 * N0 ** 2 * N1 ** 4 * N2 ** 2 + 56 * N0 * N1 ** 6 * N2 + N1 ** 8),
-         g * (
-                 280 * X0 ** 3 * X1 * X2 ** 4 + 560 * X0 ** 2 * X1 ** 3 * X2 ** 3 + 168 * X0 * X1 ** 5 * X2 ** 2 + 8 * X1 ** 7 * X2) + (
-                 1 - g) * (
-                 280 * N0 ** 3 * N1 * N2 ** 4 + 560 * N0 ** 2 * N1 ** 3 * N2 ** 3 + 168 * N0 * N1 ** 5 * N2 ** 2 + 8 * N1 ** 7 * N2),
-         g * (
-                 56 * X0 ** 3 * X2 ** 5 + 420 * X0 ** 2 * X1 ** 2 * X2 ** 4 + 280 * X0 * X1 ** 4 * X2 ** 3 + 28 * X1 ** 6 * X2 ** 2) + (
-                 1 - g) * (
-                 56 * N0 ** 3 * N2 ** 5 + 420 * N0 ** 2 * N1 ** 2 * N2 ** 4 + 280 * N0 * N1 ** 4 * N2 ** 3 + 28 * N1 ** 6 * N2 ** 2),
-         g * (168 * X0 ** 2 * X1 * X2 ** 5 + 280 * X0 * X1 ** 3 * X2 ** 4 + 56 * X1 ** 5 * X2 ** 3) + (1 - g) * (
-                 168 * N0 ** 2 * N1 * N2 ** 5 + 280 * N0 * N1 ** 3 * N2 ** 4 + 56 * N1 ** 5 * N2 ** 3),
-         g * (28 * X0 ** 2 * X2 ** 6 + 168 * X0 * X1 ** 2 * X2 ** 5 + 70 * X1 ** 4 * X2 ** 4) + (1 - g) * (
-                 28 * N0 ** 2 * N2 ** 6 + 168 * N0 * N1 ** 2 * N2 ** 5 + 70 * N1 ** 4 * N2 ** 4),
-         g * (56 * X0 * X1 * X2 ** 6 + 56 * X1 ** 3 * X2 ** 5) + (1 - g) * (
-                 56 * N0 * N1 * N2 ** 6 + 56 * N1 ** 3 * N2 ** 5),
-         g * (8 * X0 * X2 ** 7 + 28 * X1 ** 2 * X2 ** 6) + (1 - g) * (8 * N0 * N2 ** 7 + 28 * N1 ** 2 * N2 ** 6),
-         g * (8 * X1 * X2 ** 7) + (1 - g) * (8 * N1 * N2 ** 7),
-         g * (X2 ** 8) + (1 - g) * (N2 ** 8)]
-
-    return P
-
-
-def arachidonicISA(e, D, T, N, P):
-    # define tracer and naturual abundance isotopomers
-    N0 = N[0]
-    N1 = N[1]
-    N2 = N[2]
-    T0 = T[0]
-    T1 = T[1]
-    T2 = T[2]
-
-    # compute X values
-    X0 = D * T0 + (1 - D) * N0
-    X1 = D * T1 + (1 - D) * N1
-    X2 = D * T2 + (1 - D) * N2
-
-    # compute product isotopmer abundances
-
-    P = [e * (X0 * N0 ** 9) + (1 - e) * (N0 * N0 ** 9),
-         e * (X1 * N0 ** 9 + 9 * X0 * N1 * N0 ** 8) + (1 - e) * (N1 * N0 ** 9 + 9 * N0 * N1 * N0 ** 8),
-         e * (X2 * N0 ** 9 + 9 * N1 * X1 * N0 ** 8 + 9 * X0 * N2 * N0 ** 8 + 36 * X0 * N1 ** 2 * N0 ** 7) + (1 - e) * (
-                 N2 * N0 ** 9 + 9 * N1 * N1 * N0 ** 8 + 9 * N0 * N2 * N0 ** 8 + 36 * N0 * N1 ** 2 * N0 ** 7),
-         e * (
-                 9 * X1 * N2 * N0 ** 8 + 9 * N1 * X2 * N0 ** 8 + 36 * N1 ** 2 * X1 * N0 ** 7 + 72 * X0 * N1 * N2 * N0 ** 7 + 84 * X0 * N1 ** 3 * N0 ** 6) + (
-                 1 - e) * (
-                 9 * N1 * N2 * N0 ** 8 + 9 * N1 * N2 * N0 ** 8 + 36 * N1 ** 2 * N1 * N0 ** 7 + 72 * N0 * N1 * N2 * N0 ** 7 + 84 * N0 * N1 ** 3 * N0 ** 6),
-         e * (
-                 9 * N2 * X2 * N0 ** 8 + 36 * X0 * N2 ** 2 * N0 ** 7 + 72 * N1 * X1 * N2 * N0 ** 7 + 36 * N1 ** 2 * X2 * N0 ** 7 + 84 * N1 ** 3 * X1 * N0 ** 6 + 252 * X0 * N1 ** 2 * N2 * N0 ** 6 + 126 * X0 * N1 ** 4 * N0 ** 5) + (
-                 1 - e) * (
-                 9 * N2 * N2 * N0 ** 8 + 36 * N0 * N2 ** 2 * N0 ** 7 + 72 * N1 * N1 * N2 * N0 ** 7 + 36 * N1 ** 2 * N2 * N0 ** 7 + 84 * N1 ** 3 * N1 * N0 ** 6 + 252 * N0 * N1 ** 2 * N2 * N0 ** 6 + 126 * N0 * N1 ** 4 * N0 ** 5),
-         e * (
-                 36 * X1 * N2 ** 2 * N0 ** 7 + 72 * N1 * N2 * X2 * N0 ** 7 + 252 * X0 * N1 * N2 ** 2 * N0 ** 6 + 252 * N1 ** 2 * X1 * N2 * N0 ** 6 + 84 * N1 ** 3 * X2 * N0 ** 6 + 126 * N1 ** 4 * X1 * N0 ** 5 + 504 * X0 * N1 ** 3 * N2 * N0 ** 5 + 126 * X0 * N1 ** 5 * N0 ** 4) + (
-                 1 - e) * (
-                 36 * N1 * N2 ** 2 * N0 ** 7 + 72 * N1 * N2 * N2 * N0 ** 7 + 252 * N0 * N1 * N2 ** 2 * N0 ** 6 + 252 * N1 ** 2 * N1 * N2 * N0 ** 6 + 84 * N1 ** 3 * N2 * N0 ** 6 + 126 * N1 ** 4 * N1 * N0 ** 5 + 504 * N0 * N1 ** 3 * N2 * N0 ** 5 + 126 * N0 * N1 ** 5 * N0 ** 4),
-         e * (
-                 36 * N2 ** 2 * X2 * N0 ** 7 + 84 * X0 * N2 ** 3 * N0 ** 6 + 126 * N1 ** 5 * X1 * N0 ** 4 + 630 * X0 * N1 ** 4 * N2 * N0 ** 4 + 252 * N1 * X1 * N2 ** 2 * N0 ** 6 + 252 * N1 ** 2 * N2 * X2 * N0 ** 6 + 84 * X0 * N1 ** 6 * N0 ** 3 + 756 * X0 * N1 ** 2 * N2 ** 2 * N0 ** 5 + 504 * N1 ** 3 * X1 * N2 * N0 ** 5 + 126 * N1 ** 4 * X2 * N0 ** 5) + (
-                 1 - e) * (
-                 36 * N2 ** 2 * N2 * N0 ** 7 + 84 * N0 * N2 ** 3 * N0 ** 6 + 126 * N1 ** 5 * N1 * N0 ** 4 + 630 * N0 * N1 ** 4 * N2 * N0 ** 4 + 252 * N1 * N1 * N2 ** 2 * N0 ** 6 + 252 * N1 ** 2 * N2 * N2 * N0 ** 6 + 84 * N0 * N1 ** 6 * N0 ** 3 + 756 * N0 * N1 ** 2 * N2 ** 2 * N0 ** 5 + 504 * N1 ** 3 * N1 * N2 * N0 ** 5 + 126 * N1 ** 4 * N2 * N0 ** 5),
-         e * (
-                 36 * X0 * N1 ** 7 * N0 ** 2 + 1260 * X0 * N1 ** 3 * N2 ** 2 * N0 ** 4 + 84 * X1 * N2 ** 3 * N0 ** 6 + 630 * N1 ** 4 * X1 * N2 * N0 ** 4 + 126 * N1 ** 5 * X2 * N0 ** 4 + 252 * N1 * N2 ** 2 * X2 * N0 ** 6 + 504 * X0 * N1 * N2 ** 3 * N0 ** 5 + 756 * N1 ** 2 * X1 * N2 ** 2 * N0 ** 5 + 84 * N1 ** 6 * X1 * N0 ** 3 + 504 * X0 * N1 ** 5 * N2 * N0 ** 3 + 504 * N1 ** 3 * N2 * X2 * N0 ** 5) + (
-                 1 - e) * (
-                 36 * N0 * N1 ** 7 * N0 ** 2 + 1260 * N0 * N1 ** 3 * N2 ** 2 * N0 ** 4 + 84 * N1 * N2 ** 3 * N0 ** 6 + 630 * N1 ** 4 * N1 * N2 * N0 ** 4 + 126 * N1 ** 5 * N2 * N0 ** 4 + 252 * N1 * N2 ** 2 * N2 * N0 ** 6 + 504 * N0 * N1 * N2 ** 3 * N0 ** 5 + 756 * N1 ** 2 * N1 * N2 ** 2 * N0 ** 5 + 84 * N1 ** 6 * N1 * N0 ** 3 + 504 * N0 * N1 ** 5 * N2 * N0 ** 3 + 504 * N1 ** 3 * N2 * N2 * N0 ** 5),
-         e * (
-                 1260 * X0 * N1 ** 2 * N2 ** 3 * N0 ** 4 + 1260 * N1 ** 3 * X1 * N2 ** 2 * N0 ** 4 + 84 * N2 ** 3 * X2 * N0 ** 6 + 630 * N1 ** 4 * N2 * X2 * N0 ** 4 + 36 * N1 ** 7 * X1 * N0 ** 2 + 252 * X0 * N1 ** 6 * N2 * N0 ** 2 + 126 * X0 * N2 ** 4 * N0 ** 5 + 504 * N1 * X1 * N2 ** 3 * N0 ** 5 + 1260 * X0 * N1 ** 4 * N2 ** 2 * N0 ** 3 + 9 * X0 * N1 ** 8 * N0 + 504 * N1 ** 5 * X1 * N2 * N0 ** 3 + 756 * N1 ** 2 * N2 ** 2 * X2 * N0 ** 5 + 84 * N1 ** 6 * X2 * N0 ** 3) + (
-                 1 - e) * (
-                 1260 * N0 * N1 ** 2 * N2 ** 3 * N0 ** 4 + 1260 * N1 ** 3 * N1 * N2 ** 2 * N0 ** 4 + 84 * N2 ** 3 * N2 * N0 ** 6 + 630 * N1 ** 4 * N2 * N2 * N0 ** 4 + 36 * N1 ** 7 * N1 * N0 ** 2 + 252 * N0 * N1 ** 6 * N2 * N0 ** 2 + 126 * N0 * N2 ** 4 * N0 ** 5 + 504 * N1 * N1 * N2 ** 3 * N0 ** 5 + 1260 * N0 * N1 ** 4 * N2 ** 2 * N0 ** 3 + 9 * N0 * N1 ** 8 * N0 + 504 * N1 ** 5 * N1 * N2 * N0 ** 3 + 756 * N1 ** 2 * N2 ** 2 * N2 * N0 ** 5 + 84 * N1 ** 6 * N2 * N0 ** 3),
-         e * (
-                 630 * X0 * N1 * N2 ** 4 * N0 ** 4 + 504 * N1 ** 5 * N2 * X2 * N0 ** 3 + 1260 * N1 ** 2 * X1 * N2 ** 3 * N0 ** 4 + 9 * N1 ** 8 * X1 * N0 + 72 * X0 * N1 ** 7 * N2 * N0 + 1260 * N1 ** 3 * N2 ** 2 * X2 * N0 ** 4 + 756 * X0 * N1 ** 5 * N2 ** 2 * N0 ** 2 + 252 * N1 ** 6 * X1 * N2 * N0 ** 2 + 126 * X1 * N2 ** 4 * N0 ** 5 + 36 * N1 ** 7 * X2 * N0 ** 2 + X0 * N1 ** 9 + 252 * N1 * N2 ** 6 * X2 * N0 ** 2 + 1680 * X0 * N1 ** 3 * N2 ** 3 * N0 ** 3 + 1260 * N1 ** 4 * X1 * N2 ** 2 * N0 ** 3 + 504 * N1 * N2 ** 3 * X2 * N0 ** 5) + (
-                 1 - e) * (
-                 630 * N0 * N1 * N2 ** 4 * N0 ** 4 + 504 * N1 ** 5 * N2 * N2 * N0 ** 3 + 1260 * N1 ** 2 * N1 * N2 ** 3 * N0 ** 4 + 9 * N1 ** 8 * N1 * N0 + 72 * N0 * N1 ** 7 * N2 * N0 + 1260 * N1 ** 3 * N2 ** 2 * N2 * N0 ** 4 + 756 * N0 * N1 ** 5 * N2 ** 2 * N0 ** 2 + 252 * N1 ** 6 * N1 * N2 * N0 ** 2 + 126 * N1 * N2 ** 4 * N0 ** 5 + 36 * N1 ** 7 * N2 * N0 ** 2 + N0 * N1 ** 9 + 252 * N1 * N2 ** 6 * N2 * N0 ** 2 + 1680 * N0 * N1 ** 3 * N2 ** 3 * N0 ** 3 + 1260 * N1 ** 4 * N1 * N2 ** 2 * N0 ** 3 + 504 * N1 * N2 ** 3 * N2 * N0 ** 5),
-         e * (
-                 126 * X0 * N2 ** 5 * N0 ** 4 + 1260 * N1 ** 4 * N2 ** 2 * X2 * N0 ** 3 + 630 * N1 * X1 * N2 ** 4 * N0 ** 4 + N1 ** 9 * X1 + 9 * X0 * N1 ** 8 * N2 + 252 * X0 * N1 ** 6 * N2 ** 2 * N0 + 72 * N1 ** 7 * X1 * N2 * N0 + 9 * N1 ** 8 * X2 * N0 + 1260 * X0 * N1 ** 4 * N2 ** 3 * N0 ** 2 + 1260 * N1 ** 2 * N2 ** 3 * X2 * N0 ** 4 + 756 * N1 ** 5 * X1 * N2 ** 2 * N0 ** 2 + 1260 * X0 * N1 ** 2 * N2 ** 4 * N0 ** 3 + 1680 * N1 ** 3 * X1 * N2 ** 3 * N0 ** 3 + 252 * N1 ** 6 * N2 * X2 * N0 ** 2 + 126 * N2 ** 4 * X2 * N0 ** 5) + (
-                 1 - e) * (
-                 126 * N0 * N2 ** 5 * N0 ** 4 + 1260 * N1 ** 4 * N2 ** 2 * N2 * N0 ** 3 + 630 * N1 * N1 * N2 ** 4 * N0 ** 4 + N1 ** 9 * N1 + 9 * N0 * N1 ** 8 * N2 + 252 * N0 * N1 ** 6 * N2 ** 2 * N0 + 72 * N1 ** 7 * N1 * N2 * N0 + 9 * N1 ** 8 * N2 * N0 + 1260 * N0 * N1 ** 4 * N2 ** 3 * N0 ** 2 + 1260 * N1 ** 2 * N2 ** 3 * N2 * N0 ** 4 + 756 * N1 ** 5 * N1 * N2 ** 2 * N0 ** 2 + 1260 * N0 * N1 ** 2 * N2 ** 4 * N0 ** 3 + 1680 * N1 ** 3 * N1 * N2 ** 3 * N0 ** 3 + 252 * N1 ** 6 * N2 * N2 * N0 ** 2 + 126 * N2 ** 4 * N2 * N0 ** 5),
-         e * (
-                 126 * X1 * N2 ** 5 * N0 ** 4 + 1680 * N1 ** 3 * N2 ** 3 * X2 * N0 ** 3 + 36 * X0 * N1 ** 7 * N2 ** 2 + 504 * X0 * N1 ** 5 * N2 ** 3 * N0 + 9 * N1 ** 8 * X1 * N2 + N1 ** 9 * X2 + 252 * N1 ** 6 * X1 * N2 ** 2 * N0 + 1260 * X0 * N1 ** 3 * N2 ** 4 * N0 ** 2 + 630 * N1 * N2 ** 4 * X2 * N0 ** 4 + 1260 * N1 ** 4 * X1 * N2 ** 3 * N0 ** 2 + 504 * X0 * N1 * N2 ** 5 * N0 ** 3 + 72 * N1 ** 7 * N2 * X2 * N0 + 1260 * N1 ** 2 * X1 * N2 ** 4 * N0 ** 3 + 756 * N1 ** 5 * N2 ** 2 * X2 * N0 ** 2) + (
-                 1 - e) * (
-                 126 * N1 * N2 ** 5 * N0 ** 4 + 1680 * N1 ** 3 * N2 ** 3 * N2 * N0 ** 3 + 36 * N0 * N1 ** 7 * N2 ** 2 + 504 * N0 * N1 ** 5 * N2 ** 3 * N0 + 9 * N1 ** 8 * N1 * N2 + N1 ** 9 * N2 + 252 * N1 ** 6 * N1 * N2 ** 2 * N0 + 1260 * N0 * N1 ** 3 * N2 ** 4 * N0 ** 2 + 630 * N1 * N2 ** 4 * N2 * N0 ** 4 + 1260 * N1 ** 4 * N1 * N2 ** 3 * N0 ** 2 + 504 * N0 * N1 * N2 ** 5 * N0 ** 3 + 72 * N1 ** 7 * N2 * N2 * N0 + 1260 * N1 ** 2 * N1 * N2 ** 4 * N0 ** 3 + 756 * N1 ** 5 * N2 ** 2 * N2 * N0 ** 2),
-         e * (
-                 36 * N1 ** 7 * X1 * N2 ** 2 + 630 * X0 * N1 ** 4 * N2 ** 4 * N0 + 504 * N1 ** 5 * X1 * N2 ** 3 * N0 + 756 * X0 * N1 ** 2 * N2 ** 5 * N0 ** 2 + 126 * N2 ** 5 * X2 * N0 ** 4 + 1260 * N1 ** 3 * X1 * N2 ** 4 * N0 ** 2 + 9 * N1 ** 8 * N2 * X2 + 84 * X0 * N2 ** 6 * N0 ** 3 + 252 * N1 ** 6 * N2 ** 2 * X2 * N0 + 504 * N1 * X1 * N2 ** 5 * N0 ** 3 + 1260 * N1 ** 4 * N2 ** 3 * X2 * N0 ** 2 + 84 * X0 * N1 ** 6 * N2 ** 3 + 1260 * N1 ** 2 * N2 ** 4 * X2 * N0 ** 3) + (
-                 1 - e) * (
-                 36 * N1 ** 7 * N1 * N2 ** 2 + 630 * N0 * N1 ** 4 * N2 ** 4 * N0 + 504 * N1 ** 5 * N1 * N2 ** 3 * N0 + 756 * N0 * N1 ** 2 * N2 ** 5 * N0 ** 2 + 126 * N2 ** 5 * N2 * N0 ** 4 + 1260 * N1 ** 3 * N1 * N2 ** 4 * N0 ** 2 + 9 * N1 ** 8 * N2 * N2 + 84 * N0 * N2 ** 6 * N0 ** 3 + 252 * N1 ** 6 * N2 ** 2 * N2 * N0 + 504 * N1 * N1 * N2 ** 5 * N0 ** 3 + 1260 * N1 ** 4 * N2 ** 3 * N2 * N0 ** 2 + 84 * N0 * N1 ** 6 * N2 ** 3 + 1260 * N1 ** 2 * N2 ** 4 * N2 * N0 ** 3),
-         e * (
-                 84 * N1 ** 6 * X1 * N2 ** 3 + 504 * X0 * N1 ** 3 * N2 ** 5 * N0 + 630 * N1 ** 4 * X1 * N2 ** 4 * N0 + 252 * X0 * N1 * N2 ** 6 * N0 ** 2 + 756 * N1 ** 2 * X1 * N2 ** 5 * N0 ** 2 + 36 * N1 ** 7 * N2 ** 2 * X2 + 504 * N1 ** 5 * N2 ** 3 * X2 * N0 + 1260 * N1 ** 3 * N2 ** 4 * X2 * N0 ** 2 + 126 * X0 * N1 ** 5 * N2 ** 4 + 504 * N1 * N2 ** 5 * X2 * N0 ** 3 + 84 * X1 * N2 ** 6 * N0 ** 3) + (
-                 1 - e) * (
-                 84 * N1 ** 6 * N1 * N2 ** 3 + 504 * N0 * N1 ** 3 * N2 ** 5 * N0 + 630 * N1 ** 4 * N1 * N2 ** 4 * N0 + 252 * N0 * N1 * N2 ** 6 * N0 ** 2 + 756 * N1 ** 2 * N1 * N2 ** 5 * N0 ** 2 + 36 * N1 ** 7 * N2 ** 2 * N2 + 504 * N1 ** 5 * N2 ** 3 * N2 * N0 + 1260 * N1 ** 3 * N2 ** 4 * N2 * N0 ** 2 + 126 * N0 * N1 ** 5 * N2 ** 4 + 504 * N1 * N2 ** 5 * N2 * N0 ** 3 + 84 * N1 * N2 ** 6 * N0 ** 3),
-         e * (
-                 504 * N1 ** 3 * X1 * N2 ** 5 * N0 + 36 * X0 * N2 ** 7 * N0 ** 2 + 252 * N1 * X1 * N2 ** 6 * N0 ** 2 + 84 * N1 ** 6 * N2 ** 3 * X2 + 630 * N1 ** 4 * N2 ** 4 * X2 * N0 + 756 * N1 ** 2 * N2 ** 5 * X2 * N0 ** 2 + 126 * X0 * N1 ** 4 * N2 ** 5 + 84 * N2 ** 6 * X2 * N0 ** 3 + 252 * X0 * N1 ** 2 * N2 ** 6 * N0 + 126 * N1 ** 5 * X1 * N2 ** 4) + (
-                 1 - e) * (
-                 504 * N1 ** 3 * N1 * N2 ** 5 * N0 + 36 * N0 * N2 ** 7 * N0 ** 2 + 252 * N1 * N1 * N2 ** 6 * N0 ** 2 + 84 * N1 ** 6 * N2 ** 3 * N2 + 630 * N1 ** 4 * N2 ** 4 * N2 * N0 + 756 * N1 ** 2 * N2 ** 5 * N2 * N0 ** 2 + 126 * N0 * N1 ** 4 * N2 ** 5 + 84 * N2 ** 6 * N2 * N0 ** 3 + 252 * N0 * N1 ** 2 * N2 ** 6 * N0 + 126 * N1 ** 5 * N1 * N2 ** 4),
-         e * (
-                 252 * N1 ** 2 * X1 * N2 ** 6 * N0 + 36 * X1 * N2 ** 7 * N0 ** 2 + 504 * N1 ** 3 * N2 ** 5 * X2 * N0 + 84 * X0 * N1 ** 3 * N2 ** 6 + 72 * X0 * N1 * N2 ** 7 * N0 + 126 * N1 ** 4 * X1 * N2 ** 5 + 126 * N1 ** 5 * N2 ** 4 * X2) + (
-                 1 - e) * (
-                 252 * N1 ** 2 * N1 * N2 ** 6 * N0 + 36 * N1 * N2 ** 7 * N0 ** 2 + 504 * N1 ** 3 * N2 ** 5 * N2 * N0 + 84 * N0 * N1 ** 3 * N2 ** 6 + 72 * N0 * N1 * N2 ** 7 * N0 + 126 * N1 ** 4 * N1 * N2 ** 5 + 126 * N1 ** 5 * N2 ** 4 * N2),
-         e * (
-                 126 * N1 ** 4 * N2 ** 5 * X2 + 252 * N1 ** 2 * N2 ** 6 * X2 * N0 + 36 * N2 ** 7 * X2 * N0 ** 2 + 36 * X0 * N1 ** 2 * N2 ** 7 + 9 * X0 * N2 ** 8 * N0 + 84 * N1 ** 3 * X1 * N2 ** 6 + 72 * N1 * X1 * N2 ** 7 * N0) + (
-                 1 - e) * (
-                 126 * N1 ** 4 * N2 ** 5 * N2 + 252 * N1 ** 2 * N2 ** 6 * N2 * N0 + 36 * N2 ** 7 * N2 * N0 ** 2 + 36 * N0 * N1 ** 2 * N2 ** 7 + 9 * N0 * N2 ** 8 * N0 + 84 * N1 ** 3 * N1 * N2 ** 6 + 72 * N1 * N1 * N2 ** 7 * N0),
-         e * (
-                 84 * N1 ** 3 * N2 ** 6 * X2 + 72 * N1 * N2 ** 7 * X2 * N0 + 9 * X0 * N1 * N2 ** 8 + 36 * N1 ** 2 * X1 * N2 ** 7 + 9 * X1 * N2 ** 8 * N0) + (
-                 1 - e) * (
-                 84 * N1 ** 3 * N2 ** 6 * N2 + 72 * N1 * N2 ** 7 * N2 * N0 + 9 * N0 * N1 * N2 ** 8 + 36 * N1 ** 2 * N1 * N2 ** 7 + 9 * N1 * N2 ** 8 * N0),
-         e * (36 * N1 ** 2 * N2 ** 7 * X2 + 9 * N2 ** 8 * X2 * N0 + X0 * N2 ** 9 + 9 * N1 * X1 * N2 ** 8) + (1 - e) * (
-                 36 * N1 ** 2 * N2 ** 7 * N2 + 9 * N2 ** 8 * N2 * N0 + N0 * N2 ** 9 + 9 * N1 * N1 * N2 ** 8),
-         e * (9 * N1 * N2 ** 8 * X2 + X1 * N2 ** 9) + (1 - e) * (9 * N1 * N2 ** 8 * N2 + N1 * N2 ** 9),
-         e * (N2 ** 9 * X2) + (1 - e) * (N2 ** 9 * N2)]
-
-    return P
 
