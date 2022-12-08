@@ -683,7 +683,7 @@ def mergeMzLists(old, new, ppm):
 
 def getMzsOfIsotopologues(formula, elementOfInterest="C"):
     # calculate relevant m/z's
-    m0Mz = f = molmass.Formula(formula)  # create formula object
+    f = molmass.Formula(formula)  # create formula object
     m0Mz = f.isotope.mass  # get monoisotopcic mass for product ion
     # get number of carbons
     comp = f.composition()
