@@ -18,7 +18,7 @@ setup(
         "matplotlib",
         "scikit-image",
         "scikit-learn",
-        "molmass",
+        "molmass==2021.6.18",
         "Pillow",
         "pyimzml",
         "picor",
