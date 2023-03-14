@@ -67,7 +67,6 @@ class MSIData():
             mzs, intensities = p.getspectrum(idx)
             args.append([mzs,intensities,self.intensityCutoff,self.targets,self.ppm,"centroid"])
             inds.append([y-1,x-1])
-
         result = startConcurrentTask(convertSpectraAndExtractIntensity,args,self.numCores,"extracting intensities",len(args))
         self.mass_errors = np.zeros((len(self.targets),self.tic_image.shape[0],self.tic_image.shape[1]))
 
@@ -479,6 +478,25 @@ def take_closest(myList, myNumber):
     else:
         return before
 
+def takeClosestInd(myList, myNumber):
+    """
+    Assumes myList is sorted. Returns closest value to myNumber.
+
+    If two numbers are equally close, return the smallest number.
+    """
+
+    pos = bisect_left(myList, myNumber)
+    if pos == 0:
+        return pos
+    if pos == len(myList):
+        return len(myList) - 1
+    before = myList[pos - 1]
+    after = myList[pos]
+    if after - myNumber < myNumber - before:
+        return pos
+    else:
+        return pos-1
+
 
 def startConcurrentTask(task, args, numCores, message, total, chunksize="none", verbose=True):
     if verbose:
@@ -615,20 +633,25 @@ def convertSpectraAndExtractIntensity(mzs, inten, thresh, targets, ppm, dtype, q
     order.sort(key=lambda x: mzs[x])
 
     mzs = [mzs[x] for x in order]
+
+
     inten = [inten[x] for x in order]
 
     for mz in targets:
         width = ppm * mz / 1e6
         mz_start = mz - width
         mz_end = mz + width
-        Origpos = bisect_left(mzs, mz)
-        if Origpos == len(mzs):
-            Origpos -= 1
+
+        Origpos = takeClosestInd(mzs,mz)
+
         pos = int(Origpos)
         val = 0
         observedMzs = [[0, 0]]
+
+        mzPath = []
         if mzs[Origpos] > mz_start and mzs[Origpos] < mz_end:
             while pos >= 0:
+                mzPath.append(mzs[pos])
                 if mzs[pos] < mz_start:
                     break
                 if inten[pos] > thresh:
@@ -636,8 +659,9 @@ def convertSpectraAndExtractIntensity(mzs, inten, thresh, targets, ppm, dtype, q
                     observedMzs.append([mzs[pos], inten[pos]])
                 pos -= 1
 
-            pos = int(Origpos)
+            pos = int(Origpos) + 1
             while pos < len(mzs):
+                mzPath.append(mzs[pos])
                 if mzs[pos] > mz_end:
                     break
                 if inten[pos] > thresh:
@@ -645,6 +669,9 @@ def convertSpectraAndExtractIntensity(mzs, inten, thresh, targets, ppm, dtype, q
                     observedMzs.append([mzs[pos], inten[pos]])
 
                 pos += 1
+
+        #if len(observedMzs)-1 != len([x for x in mzs if x > mz_start and x < mz_end]):
+        #    print(mzs[Origpos],mz_start,mz_end,mzPath,observedMzs,[x for x in mzs if x > mz_start and x < mz_end])
 
         if len(observedMzs) > 1:
             observedMzs = np.array(observedMzs)
