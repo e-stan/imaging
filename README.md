@@ -4,6 +4,8 @@ Code and notebooks for the analysis of MSI data of isotopically labeled samples.
 
 # Installation
 
+SIMSIToolBox can be installed via pip. This package has been tested with Python 3.7.
+
 ```
 pip install SIMSIToolBox
 ```
