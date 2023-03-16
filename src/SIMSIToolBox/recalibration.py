@@ -11,7 +11,7 @@ from threading import Thread
 import random as rd
 import matplotlib.pyplot as plt
 
-def write_corrected_msi(msi,output_file,tolerance,database_exactmass,step,dalim,numCores):
+def write_corrected_msi(msi,output_file,tolerance,database_exactmass,step,dalim,threshold,numCores):
     """
     perform adaptive pixel normalization
     :param msi: str, path to input imzml data file
@@ -20,6 +20,7 @@ def write_corrected_msi(msi,output_file,tolerance,database_exactmass,step,dalim,
     :param database_exactmass: list, sorted list of m/z values for calibrating compounds
     :param step: float, parameter for controlling smoothing of histogram. Higher = more smoothing, lower = less smoothing
     :param dalim: float, maximum expected spread of mass shifts in m/z
+    :param threshold: float, minimum intensity threshold to consider for peak finding
     :param numCores: int, number of processor cores to use
     :return: None
     """
@@ -31,7 +32,7 @@ def write_corrected_msi(msi,output_file,tolerance,database_exactmass,step,dalim,
     for idx, (x, y, z) in enumerate(p.coordinates):
 
         ms_mzs, ms_intensities = p.getspectrum(idx)
-        args.append([ms_mzs,ms_intensities,tolerance,database_exactmass,step,dalim])
+        args.append([ms_mzs,ms_intensities,tolerance,database_exactmass,step,dalim,threshold])
         coords.append((x,y,z))
 
     print("done")
@@ -50,7 +51,7 @@ def write_corrected_msi(msi,output_file,tolerance,database_exactmass,step,dalim,
     print("writing spectra...",end="")
     print("done")
 
-def visualizeParameters(msi,n,tolerance,database_exactmass,step,dalim):
+def visualizeParameters(msi,n,tolerance,database_exactmass,step,dalim,threshold):
     """
     visualize correction results for given parameters
     :param msi: str, path to input imzml data file
@@ -59,6 +60,7 @@ def visualizeParameters(msi,n,tolerance,database_exactmass,step,dalim):
     :param database_exactmass: list, sorted list of m/z values for calibrating compounds
     :param step: float, parameter for controlling smoothing of histogram. Higher = more smoothing, lower = less smoothing
     :param dalim: float, maximum expected spread of mass shifts in m/z
+    :param threshold: float, minimum intensity threshold to consider for peak finding
     :return: None
     """
     p = ImzMLParser(msi, parse_lib='ElementTree')
@@ -69,7 +71,7 @@ def visualizeParameters(msi,n,tolerance,database_exactmass,step,dalim):
         plt.figure()
         plt.title(i)
         ms_mzs, ms_intensities = p.getspectrum(x)
-        peaks_ind = peak_selection(ms_intensities)
+        peaks_ind = peak_selection(ms_intensities,threshold)
         peaks_mz = ms_mzs[peaks_ind]
 
         print(len(peaks_mz), "peaks found")
@@ -106,10 +108,12 @@ def visualizeParameters(msi,n,tolerance,database_exactmass,step,dalim):
 
 ##### HELPER FUNCTIONS #####
 
-def peak_selection(ms_intensities):
+def peak_selection(ms_intensities,threshold=0):
     # return the 300 mot intense centroid of a mass spectrum
-    intensities_arr = np.array(ms_intensities)
-    return(intensities_arr.argsort()[::-1][:300])
+    #intensities_arr = np.array(ms_intensities)
+    #return(intensities_arr.argsort()[::-1][:300])
+    inds = np.array(ms_intensities).argsort()[::-1]
+    return np.array([x for x in inds if ms_intensities[x] > threshold])
 
 def compute_masserror(experimental_mass, database_mass, tolerance):
     # mass error in Dalton
@@ -194,8 +198,8 @@ def correct_mz_lm(ms_mzs,mz_error_model):
     estimated_mz = ms_mzs - predicted_mz_errors
     return(estimated_mz)
 
-def correctSpectrum(ms_mzs,ms_intensities,tolerance,database_exactmass,step,dalim,q=None):
-    peaks_ind = peak_selection(ms_intensities)
+def correctSpectrum(ms_mzs,ms_intensities,tolerance,database_exactmass,step,dalim,threshold,q=None):
+    peaks_ind = peak_selection(ms_intensities,threshold)
     peaks_mz = ms_mzs[peaks_ind]
 
     corrected_mzs = deepcopy(ms_mzs)
