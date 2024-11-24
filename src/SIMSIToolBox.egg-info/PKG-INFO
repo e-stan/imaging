@@ -1,0 +1,16 @@
+Metadata-Version: 2.1
+Name: SIMSIToolBox
+Version: 0.1.4
+Summary: Functions for analysis of stable isotope labeling mass spectrometry imaging data
+Home-page: https://github.com/e-stan/imaging/
+Download-URL: https://github.com/e-stan/imaging/archive/v0.1.4.tar.gz
+Author: Ethan Stancliffe
+Author-email: estancl1234@gmail.com
+License: MIT
+Keywords: Metabolomics,Mass Spectrometry Imaging,Stable Isotope Labeling
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Software Development :: Build Tools
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3.7
+License-File: LICENSE.txt

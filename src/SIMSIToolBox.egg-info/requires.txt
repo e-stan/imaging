@@ -1,0 +1,11 @@
+numpy
+scipy
+pandas
+matplotlib
+scikit-image
+scikit-learn
+molmass==2021.6.18
+Pillow
+pyimzml
+picor
+sympy
