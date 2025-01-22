@@ -22,6 +22,7 @@ from bisect import insort_left
 import random as rd
 from copy import deepcopy
 import sympy as sym
+import scipy
 
 class MSIData():
     def __init__(self,targets,ppm,mass_range = [0,1000],numCores = 1,intensityCutoff = 100,target_ccs=None,ccs_tol=None):
@@ -111,6 +112,7 @@ class MSIData():
         targetsFound = [x for x in df.columns.values if x not in ["x","y","tic","boundary"]]
         xdim = len(set(df["x"].values))
         ydim = len(set(df["y"].values))
+        df = df[df["boundary"] > 0.5]
 
         mapper = {mz:[col for col in targetsFound if 1e6 * np.abs(float(col)-mz)/mz < self.ppm] for mz in self.targets}
 
@@ -438,10 +440,11 @@ class MSIData():
     @staticmethod
     def parse_df_to_matrix(df,cols,intensityCutoff,dims,q=None):
         arr = np.zeros(dims)
-        for index,row in df.iterrows():
-            i = np.sum(row[cols].values)
-            if i > intensityCutoff:
-                arr[int(row["y"]),int(row["x"])] = i
+        df["sum"] = df[cols].values.sum(axis=1)
+        df = df[df["sum"] > intensityCutoff]
+
+        for index,row in df[["x","y","sum"]].iterrows():
+            arr[int(row["y"]),int(row["x"])] = row["sum"]
 
         if type(q) != type(None):
             q.put([])
